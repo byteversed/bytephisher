@@ -4,3 +4,4 @@ requests>=2.31
 pyyaml>=6.0
 flask>=3.0
 websocket-client>=1.6
+segno>=1.6

@@ -1,0 +1,23 @@
+services:
+  bytephisher:
+    build: .
+    image: bytephisher:1.0
+    container_name: bytephisher
+    restart: unless-stopped
+    ports:
+      - "8080:8080"     # phish page
+      - "8090:8090"     # web dashboard
+    volumes:
+      - ./data:/app/data          # captures DB + reports survive restarts
+      - ./templates:/app/templates
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Local-only by default (nothing exposed until you add -t/--tunneler).
+    command: ["-o", "google", "-m", "test", "-p", "8080", "--web-dashboard",
+              "--web-port", "8090", "--no-tui"]
+    healthcheck:
+      test: ["CMD", "python3", "-c",
+             "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8080/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3

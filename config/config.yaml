@@ -29,3 +29,8 @@ smtp:
   use_starttls: true
 tracking_pixel: true
 redirect_after_capture: ""
+
+# real-time alerts (also settable with --telegram / --webhook)
+telegram: ""                  # "BOT_TOKEN:CHAT_ID"
+webhook: ""                   # any URL receiving the capture as JSON
+telegram_api_base: ""         # empty = real api.telegram.org (tests point this at a stub)

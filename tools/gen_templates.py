@@ -98,6 +98,106 @@ SITES = [
     ("revolut",      "Revolut",         "#191C1F", "#0666EB", "phone",          "verification code"),
     ("aws",          "AWS",             "#FF9900", "#232F3E", "email",          "MFA code"),
     ("cloudflare",   "Cloudflare",      "#F38020", "#0051C3", "email",          "verification code"),
+    # ---- extended library (81-150): SaaS, dev tools, finance, streaming ----
+    ("atlassian",    "Atlassian",       "#0052CC", "#2684FF", "email",          "verification code"),
+    ("jira",         "Jira",            "#0052CC", "#2684FF", "email",          "6-digit code"),
+    ("confluence",   "Confluence",      "#0052CC", "#2684FF", "email",          "6-digit code"),
+    ("bitwarden",    "Bitwarden",       "#175DDC", "#ffffff", "email",          "2FA code"),
+    ("lastpass",     "LastPass",        "#D32D27", "#ffffff", "email",          "verification code"),
+    ("onepassword",  "1Password",       "#1A8CFF", "#ffffff", "email",          "verification code"),
+    ("dashlane",     "Dashlane",        "#0E353D", "#0E353D", "email",          "verification code"),
+    ("nordvpn",      "NordVPN",         "#4687FF", "#ffffff", "email",          "verification code"),
+    ("protonmail",   "Proton Mail",     "#6D4AFF", "#ffffff", "email",          "2FA code"),
+    ("zoho",         "Zoho",            "#E42527", "#ffffff", "email",          "6-digit code"),
+    ("salesforce",   "Salesforce",      "#00A1E0", "#032E61", "email",          "verification code"),
+    ("hubspot",      "HubSpot",         "#FF7A59", "#33475B", "email",          "6-digit code"),
+    ("mailchimp",    "Mailchimp",       "#FFE01B", "#241C15", "email",          "6-digit code"),
+    ("sendgrid",     "SendGrid",        "#1A82E2", "#ffffff", "email",          "verification code"),
+    ("twilio",       "Twilio",          "#F22F46", "#ffffff", "email",          "verification code"),
+    ("stripe",       "Stripe",          "#635BFF", "#0A2540", "email",          "verification code"),
+    ("square",       "Square",          "#3E4348", "#006AFF", "email",          "6-digit code"),
+    ("klarna",       "Klarna",          "#FFB3C7", "#0E0E0F", "email",          "verification code"),
+    ("plaid",        "Plaid",           "#111111", "#ffffff", "email",          "verification code"),
+    ("quickbooks",   "QuickBooks",      "#2CA01C", "#ffffff", "email",          "verification code"),
+    ("xero",         "Xero",            "#13B5EA", "#ffffff", "email",          "6-digit code"),
+    ("godaddy",      "GoDaddy",         "#1BDBDB", "#111111", "email",          "verification code"),
+    ("namecheap",    "Namecheap",       "#DE3723", "#ffffff", "email",          "6-digit code"),
+    ("hostinger",    "Hostinger",       "#673DE6", "#ffffff", "email",          "6-digit code"),
+    ("digitalocean", "DigitalOcean",    "#0080FF", "#ffffff", "email",          "verification code"),
+    ("linode",       "Linode",          "#00A95C", "#ffffff", "email",          "verification code"),
+    ("vultr",        "Vultr",           "#007BFC", "#ffffff", "email",          "verification code"),
+    ("heroku",       "Heroku",          "#430098", "#ffffff", "email",          "verification code"),
+    ("vercel",       "Vercel",          "#000000", "#ffffff", "email",          "verification code"),
+    ("netlify",      "Netlify",         "#00C7B7", "#0E1E25", "email",          "verification code"),
+    ("supabase",     "Supabase",        "#3ECF8E", "#1C1C1C", "email",          "verification code"),
+    ("firebase",     "Firebase",        "#FFCA28", "#1A73E8", "email",          "verification code"),
+    ("mongodb",      "MongoDB",         "#47A248", "#001E2B", "email",          "verification code"),
+    ("redis",        "Redis",           "#DC382D", "#ffffff", "email",          "verification code"),
+    ("datadog",      "Datadog",         "#632CA6", "#ffffff", "email",          "verification code"),
+    ("sentry",       "Sentry",          "#362D59", "#ffffff", "email",          "verification code"),
+    ("grafana",      "Grafana",         "#F46800", "#1F1F20", "email",          "verification code"),
+    ("splunk",       "Splunk",          "#000000", "#65A637", "email",          "verification code"),
+    ("pagerduty",    "PagerDuty",       "#06AC38", "#ffffff", "email",          "verification code"),
+    ("okta",         "Okta",            "#007DC1", "#ffffff", "email",          "verification code"),
+    ("auth0",        "Auth0",           "#EB5424", "#16214D", "email",          "verification code"),
+    ("workday",      "Workday",         "#0875E1", "#ffffff", "email",          "verification code"),
+    ("bamboohr",     "BambooHR",        "#73C41D", "#ffffff", "email",          "verification code"),
+    ("gusto",        "Gusto",           "#F45D48", "#0A8080", "email",          "verification code"),
+    ("docusign",     "DocuSign",        "#4C00FF", "#FFCC22", "email",          "verification code"),
+    ("calendly",     "Calendly",        "#006BFF", "#0B3558", "email",          "verification code"),
+    ("typeform",     "Typeform",        "#262627", "#ffffff", "email",          "verification code"),
+    ("surveymonkey", "SurveyMonkey",    "#00BF6F", "#ffffff", "email",          "verification code"),
+    ("patreon",      "Patreon",         "#FF424D", "#0B0B0B", "email",          "verification code"),
+    ("substack",     "Substack",        "#FF6719", "#ffffff", "email",          "verification code"),
+    ("medium",       "Medium",          "#000000", "#1A8917", "email",          "verification code"),
+    ("quora",        "Quora",           "#B92B27", "#ffffff", "email",          "verification code"),
+    ("tumblr",       "Tumblr",          "#36465D", "#ffffff", "email",          "verification code"),
+    ("imgur",        "Imgur",           "#1BB76E", "#ffffff", "email",          "verification code"),
+    ("vimeo",        "Vimeo",           "#1AB7EA", "#000000", "email",          "verification code"),
+    ("soundcloud",   "SoundCloud",      "#FF5500", "#333333", "email",          "verification code"),
+    ("hulu",         "Hulu",            "#1CE783", "#0B0B0B", "email",          "verification code"),
+    ("disneyplus",   "Disney+",         "#113CCF", "#000000", "email",          "verification code"),
+    ("primevideo",   "Prime Video",     "#00A8E1", "#1A1A1A", "email",          "verification code"),
+    ("crunchyroll",  "Crunchyroll",     "#F47521", "#171717", "email",          "verification code"),
+    ("wetransfer",   "WeTransfer",      "#409FFF", "#2C2C2C", "email",          "verification code"),
+    ("mega",         "MEGA",            "#D9272E", "#0F0F0F", "email",          "verification code"),
+    ("kaggle",       "Kaggle",          "#20BEFF", "#2A2A2A", "email",          "verification code"),
+    ("hackerrank",   "HackerRank",      "#00EA64", "#101828", "email",          "verification code"),
+    ("leetcode",     "LeetCode",        "#FFA116", "#1A1A1A", "email",          "verification code"),
+    ("coursera",     "Coursera",        "#0056D2", "#ffffff", "email",          "verification code"),
+    ("udemy",        "Udemy",           "#A435F0", "#1C1D1F", "email",          "verification code"),
+    ("edx",          "edX",             "#02262B", "#D6400A", "email",          "verification code"),
+    ("byjus",        "BYJU'S",          "#8133F1", "#ffffff", "email",          "OTP"),
+    ("unacademy",    "Unacademy",       "#08BD80", "#ffffff", "phone",          "OTP"),
+    ("vedantu",      "Vedantu",         "#FF6B00", "#ffffff", "phone",          "OTP"),
+    ("irctc",        "IRCTC",           "#0A3D62", "#F79F1F", "username",       "OTP"),
+    ("uidai",        "Aadhaar Services", "#0F52BA", "#FF9933", "username",      "OTP"),
+    ("epfindia",     "EPFO",            "#1B5E20", "#FFC107", "username",       "OTP"),
+    ("gst",          "GST Portal",      "#0B5394", "#E8A33D", "username",       "OTP"),
+    ("digilocker",   "DigiLocker",      "#1C3F94", "#F26522", "phone",          "OTP"),
+    ("canarabank",   "Canara Bank",     "#00539F", "#F7A800", "username",       "OTP"),
+    ("pnb",          "Punjab National Bank", "#A11C2C", "#F2A900", "username",  "OTP"),
+    ("bob",          "Bank of Baroda",  "#F26522", "#00437A", "username",       "OTP"),
+    ("idfc",         "IDFC FIRST Bank", "#9C1D26", "#00594F", "phone",          "OTP"),
+    ("federal",      "Federal Bank",    "#002D62", "#F5A623", "username",       "OTP"),
+    ("indusind",     "IndusInd Bank",   "#982A2E", "#E1B351", "username",       "OTP"),
+    ("yesbank",      "YES Bank",        "#004C8F", "#00A0DF", "username",       "OTP"),
+    ("cred",         "CRED",            "#111111", "#ffffff", "phone",          "OTP"),
+    ("mobikwik",     "MobiKwik",        "#EF4A56", "#2B2B2B", "phone",          "OTP"),
+    ("freecharge",   "Freecharge",      "#FF5722", "#1E1E1E", "phone",          "OTP"),
+    ("bharatpe",     "BharatPe",        "#00B9F1", "#0B2447", "phone",          "OTP"),
+    ("zerodha",      "Zerodha",         "#FF5722", "#2B2B2B", "username",       "OTP"),
+    ("groww",        "Groww",           "#00D09C", "#44475B", "email",          "6-digit code"),
+    ("upstox",       "Upstox",          "#387ED1", "#ffffff", "phone",          "OTP"),
+    ("angelone",     "Angel One",       "#FF6B00", "#1B1B1B", "username",       "OTP"),
+    ("cryptocom",    "Crypto.com",      "#1199FA", "#0B1426", "email",          "2FA code"),
+    ("kucoin",       "KuCoin",          "#24AE8F", "#1B1B1B", "email",          "2FA code"),
+    ("okx",          "OKX",             "#000000", "#ffffff", "email",          "2FA code"),
+    ("bitfinex",     "Bitfinex",        "#16B157", "#0B0B0B", "email",          "2FA code"),
+    ("ledger",       "Ledger",          "#000000", "#ffffff", "email",          "verification code"),
+    ("trezor",       "Trezor",          "#0B0B0B", "#14C46A", "email",          "verification code"),
+    ("trustwallet",  "Trust Wallet",    "#3375BB", "#ffffff", "email",          "verification code"),
+    ("slackstatus",  "Slack SSO",       "#E01E5A", "#36C5F0", "email",          "SSO code"),
 ]
 
 FIELD_LABELS = {
@@ -287,7 +387,33 @@ def build_site(slug, name, brand, accent, login_with, otp_label):
     return html, otp_html, fields_json
 
 
+VALID_LOGIN_WITH = {"email", "username", "phone", "email_or_phone"}
+
+
+def validate_sites(sites=SITES):
+    """Fail loudly on bad data instead of generating a broken template
+    (a typo'd login_with used to crash mid-generation with a KeyError)."""
+    problems = []
+    seen = set()
+    for s in sites:
+        slug, name, brand, accent, login_with, otp = s
+        if login_with not in VALID_LOGIN_WITH:
+            problems.append(f"{slug}: invalid login_with={login_with!r}")
+        if slug != slug.lower() or " " in slug:
+            problems.append(f"{slug}: slug must be lowercase with no spaces")
+        if slug in seen:
+            problems.append(f"{slug}: duplicate slug")
+        seen.add(slug)
+        for col in (brand, accent):
+            if not col.startswith("#") or len(col) not in (4, 7):
+                problems.append(f"{slug}: bad colour {col!r}")
+    if problems:
+        raise SystemExit("[gen_templates] invalid site data:\n  " + "\n  ".join(problems))
+    return True
+
+
 def main():
+    validate_sites()
     os.makedirs(OUT, exist_ok=True)
     manifest = []
     for i, (slug, name, brand, accent, login_with, otp_label) in enumerate(SITES, 1):

