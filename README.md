@@ -3,7 +3,7 @@
 **Advanced phishing-simulation framework** for authorized security-awareness
 engagements, red-team exercises and CTF/lab work.
 
-Pure-Python engine (no PHP), 179 brand templates, 6 concurrent tunnels,
+Pure-Python engine (no PHP), 243 brand templates, 6 concurrent tunnels,
 SQLite capture store, live TUI + web dashboard, 2FA/OTP flow, campaign tagging
 with A/B template rotation, bot/scanner risk scoring, QR codes, one-file HTML
 campaign reports, SMTP spear-phishing module and CSV export.
@@ -19,7 +19,7 @@ campaign reports, SMTP spear-phishing module and CSV export.
 | Capability | PyPhisher | BlackEye | ZPhisher | **BytePhisher** |
 |---|---|---|---|---|
 | Server stack | PHP required | PHP required | PHP required | **pure Python (no PHP)** |
-| Templates | 77 | 33 | 30+ | **179 built-in + import any real login page** |
+| Templates | 77 | 33 | 30+ | **243 built-in + import any real login page** |
 | Tunnels | 4 (concurrent) | LAN / 1 | 1 | **6 concurrent (cloudflared, ngrok, localhost.run, serveo, bore, hoplink)** |
 | Capture store | text file | text file | text file | **SQLite (WAL) + CSV/JSON export** |
 | Campaigns | ✗ | ✗ | ✗ | **✓ tagging, per-campaign stats, A/B template rotation** |
@@ -102,6 +102,7 @@ No PHP, no web server, no external binaries except the tunnel client you pick
 | `--active-hours 9-18` / `--active-days mon-fri` | gate by local time window |
 | `--max-hits N` | refuse an IP after N hits per hour |
 | `--decoy URL` | where gated-out visitors are sent (default: inert 503) |
+| `--tunnel-restart` | auto-restart a tunneler that dies mid-campaign (max 5 each) |
 | `--qr [PATH]` | save a QR code PNG of the live link (default `data/qr.png`) |
 | `--report PATH` | write a self-contained HTML campaign report and exit |
 | `--pdf PATH` | write a dark-theme PDF campaign report (CONFIRMED/SUSPECTED labels) and exit |
@@ -148,7 +149,9 @@ build (honest, not aspirational):
 A dead tunneler returns `None` and the rest keep working — `-t all` brings up
 everything it can and prints which links are live. During a run the CLI also
 watches the tunnel processes: if one exits (quick tunnels do drop their edge
-connection), you get a loud warning naming it rather than a silently dead link.
+connection), you get a loud warning naming it rather than a silently dead link —
+and with `--tunnel-restart` the CLI brings it back automatically (up to 5
+attempts per tunneler) and prints the new public URL.
 
 ## Campaign gating (who even sees the page)
 
@@ -288,7 +291,7 @@ tunnels/__init__.py     6 tunneler adapters, auto-download, URL scraping from lo
                         process tracking + clean shutdown
 dashboard/__init__.py   rich TUI (live_loop), Flask web dashboard + JSON API
 mailer/__init__.py      SMTP spear-phishing (4 templates, HTML, tracking pixel)
-tools/gen_templates.py  179-site template generator (add a site = one tuple)
+tools/gen_templates.py  243-site template generator (add a site = one tuple)
 tools/import_site.py    import any real login page as a template
 tools/report.py         self-contained HTML campaign report
 tools/probe_tunnels.py  probe all six tunnelers against the real internet
@@ -345,7 +348,7 @@ docker run --rm -p 8080:8080 -p 8090:8090 -v "$PWD/data:/app/data" bytephisher \
 | Suite | What it proves |
 |---|---|
 | `tests/test_e2e.py` | standalone end-to-end: real HTTP server, real POST, real SQLite rows |
-| `tests/test_units.py` | body parsing (urlencoded/multipart/JSON/unicode), credential detection, device classification, capture DB (+concurrency, dedupe, migrations, CSV/JSON), all 179 templates, mailer rendering, alerts, tunneler URL patterns, CLI helpers, custom-site import |
+| `tests/test_units.py` | body parsing (urlencoded/multipart/JSON/unicode), credential detection, device classification, capture DB (+concurrency, dedupe, migrations, CSV/JSON), all generated templates (243), mailer rendering, alerts, tunneler URL patterns, CLI helpers, custom-site import |
 | `tests/test_http.py` | live HTTP behaviour: GET/POST variants, honeypot, timing field, forwarded-IP resolution, device detection over the wire, redirect mode, OTP flow, TLS, webhook firing end-to-end, 40 parallel submissions |
 | `tests/test_features.py` | risk engine + risk over HTTP, QR output, HTML report (incl. escaping), template rotation, alert payloads, new CLI flags, JSON/CSV export, stress tool integrity, doctor, campaign launcher |
 | `tests/test_gate.py` | gating parsers, gate logic (country/datacenter/hours/days/hit-cap), gating over real HTTP incl. decoy redirect and "refused visitors are not counted" |

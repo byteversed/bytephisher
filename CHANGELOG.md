@@ -33,7 +33,7 @@ why, with the verification evidence where a change came from a live bug.
 * CSV export, per-campaign stats, campaign breakdown.
 
 ### Templates
-* 179 generated templates (brand colours, correct field names, OTP page, OG
+* 243 generated templates (brand colours, correct field names, OTP page, OG
   meta tags, demonstration footer) plus `tools/import_site.py` to turn any real
   login page into a template (asset absolutisation, form neutralisation,
   field extraction, auto-registered index).
@@ -49,6 +49,10 @@ why, with the verification evidence where a change came from a live bug.
 * Tunnel watchdog in the live loop: if a tunneler exits mid-campaign the CLI
   prints a loud warning naming it, instead of silently serving a dead link
   (`tunnels.dead_names()` / `running_names()`).
+* `--tunnel-restart`: the watchdog brings a dead tunneler back automatically
+  (max 5 attempts each) and prints the fresh public URL. `dead_names()` reports
+  only the *current* process per tunneler, so a restart cannot loop forever on
+  the old dead process.
 * Verified live in this build: cloudflared, localhost.run, bore. Dead services
   (serveo, hoplink) and unconfigured ngrok fail soft and are reported honestly.
 
