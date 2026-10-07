@@ -43,6 +43,13 @@ class CaptureDB:
             first_seen REAL,
             hits INTEGER DEFAULT 1
         );
+        CREATE TABLE IF NOT EXISTS blocked (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL,
+            ip TEXT,
+            country TEXT,
+            reason TEXT
+        );
         """)
         # Visitor de-duplication depends on a UNIQUE(ip, ua) index: without it
         # every page view inserted a new row and "unique visitors" was wrong.
@@ -132,6 +139,19 @@ class CaptureDB:
         visitors = self.conn.execute("SELECT COUNT(*) FROM visitors").fetchone()[0]
         return {"total_captures": total, "credentials": creds, "visitors": visitors,
                 "credible_credentials": credible}
+
+    def log_blocked(self, ip, country, reason):
+        """Gated visitor refused — recorded so reporting can state the real ratio."""
+        with self._lock:
+            self.conn.execute("INSERT INTO blocked (ts, ip, country, reason) VALUES (?,?,?,?)",
+                              (time.time(), ip or "", country or "", reason or ""))
+            self.conn.commit()
+
+    def blocked_stats(self):
+        rows = self.conn.execute(
+            "SELECT reason, COUNT(*) FROM blocked GROUP BY reason ORDER BY COUNT(*) DESC").fetchall()
+        total = self.conn.execute("SELECT COUNT(*) FROM blocked").fetchone()[0]
+        return {"total_blocked": total, "by_reason": [{"reason": r[0], "count": r[1]} for r in rows]}
 
     def campaigns(self):
         """Per-campaign breakdown for the dashboard / reporting."""

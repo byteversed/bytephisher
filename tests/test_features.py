@@ -475,6 +475,57 @@ class TestDoctor:
         assert p.returncode == 0
 
 
+# ==================================================== tunnel watchdog ========
+class TestTunnelWatchdog:
+    """Kill the tunnel process mid-run and prove the CLI warns about it."""
+
+    def test_cli_warns_when_tunneler_dies(self):
+        import signal as _signal
+        import socket as _socket
+        try:
+            _socket.create_connection(("1.1.1.1", 443), timeout=4).close()
+        except Exception:
+            pytest.skip("no outbound network")
+        port = free_port()
+        proc = subprocess.Popen([PY, os.path.join(HERE, "bytephisher.py"),
+                                 "-o", "google", "-t", "localhost_run", "-p", str(port),
+                                 "-m", "normal", "--no-tui", "--geo", "off"],
+                                cwd=HERE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        try:
+            buf = ""
+            deadline = time.time() + 60
+            while time.time() < deadline and "lhr.life" not in buf:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                buf += line
+            if "lhr.life" not in buf:
+                pytest.skip("localhost.run did not produce a URL in time")
+
+            # kill the ssh tunnel process behind the CLI's back
+            killed = subprocess.run(["pkill", "-f", "nokey@localhost.run"],
+                                    capture_output=True, text=True)
+            if killed.returncode != 0:
+                pytest.skip("could not find the ssh tunnel process to kill")
+
+            # the watchdog runs every ~10s in the plain loop
+            deadline = time.time() + 40
+            while time.time() < deadline and "WARNING: tunneler" not in buf:
+                line = proc.stdout.readline()
+                if not line:
+                    break
+                buf += line
+            assert "WARNING: tunneler" in buf, buf[-600:]
+            assert "localhost_run" in buf.split("WARNING: tunneler")[1][:60]
+        finally:
+            if proc.poll() is None:
+                proc.send_signal(_signal.SIGINT)
+                try:
+                    proc.communicate(timeout=25)
+                except Exception:
+                    proc.kill()
+
+
 # ==================================================== campaign launcher ======
 class TestCampaignLauncher:
     """tools/campaign.sh: preflight -> run -> auto report/CSV on exit."""

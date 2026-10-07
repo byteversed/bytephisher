@@ -35,12 +35,14 @@ def free_port():
 
 def fetch(url, timeout=25, attempts=6, delay=5):
     """Public URLs (esp. cloudflared quick tunnels) can return 530 for the first
-    few seconds while the edge connection registers — retry before judging."""
+    few seconds while the edge connection registers — retry before judging.
+    IPv4-preferring: an AAAA-only answer fails with Errno 101 on IPv4-only hosts."""
+    from core import net
     last = None
     for i in range(attempts):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "bytephisher-probe/1.0"})
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with net.urlopen(url, timeout=timeout,
+                             headers={"User-Agent": "bytephisher-probe/1.0"}) as r:
                 return r.status, r.read()[:4000]
         except urllib.error.HTTPError as e:
             last = e

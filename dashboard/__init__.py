@@ -38,18 +38,25 @@ def make_frame(caps, stats):
     return Panel(t, subtitle=subtitle)
 
 
-def live_loop(db, stop, refresh=1.5):
+def live_loop(db, stop, refresh=1.5, watchdog=None):
     """Run a full-screen rich dashboard until stop['flag'] is set.
-    Reads the capture DB on every refresh, so new hits appear live."""
+    Reads the capture DB on every refresh, so new hits appear live.
+    `watchdog` (optional callable) runs periodically — the CLI uses it to warn
+    when a tunneler process dies mid-campaign."""
     from rich.console import Console
     from rich.live import Live
+    import time as _time
 
     console = Console()
+    last_check = _time.time()
     with Live(make_frame(db.all(40), db.stats()), console=console,
               refresh_per_second=4, screen=True, transient=False) as live:
         while not stop.get("flag"):
-            time.sleep(refresh)
+            _time.sleep(refresh)
             live.update(make_frame(db.all(40), db.stats()))
+            if watchdog and _time.time() - last_check > 10:
+                watchdog()
+                last_check = _time.time()
 
 
 def render_tui(caps, stats, refresh=3):
@@ -137,6 +144,10 @@ poll();
         campaign = request.args.get("campaign")
         data = db.stats(campaign=campaign)
         data["campaigns"] = db.campaigns()
+        try:
+            data["blocked"] = db.blocked_stats()
+        except Exception:
+            data["blocked"] = {"total_blocked": 0, "by_reason": []}
         return jsonify(data)
 
     th = threading.Thread(target=app.run,

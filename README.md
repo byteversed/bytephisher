@@ -97,6 +97,11 @@ No PHP, no web server, no external binaries except the tunnel client you pick
 | `--mail-template` | `password_reset` \| `security_alert` \| `shared_doc` \| `invoice` |
 | `--campaign NAME` | tag captures with a campaign (default: template slug) |
 | `--rotate a,b,c` | serve a random one of these templates per request (A/B) |
+| `--allow-country CC` / `--block-country CC` | gate by country code |
+| `--block-datacenter` | refuse hosting/cloud ASNs |
+| `--active-hours 9-18` / `--active-days mon-fri` | gate by local time window |
+| `--max-hits N` | refuse an IP after N hits per hour |
+| `--decoy URL` | where gated-out visitors are sent (default: inert 503) |
 | `--qr [PATH]` | save a QR code PNG of the live link (default `data/qr.png`) |
 | `--report PATH` | write a self-contained HTML campaign report and exit |
 | `--export PATH` | dump captures (`.json` → JSON, anything else → CSV) and exit |
@@ -140,7 +145,37 @@ build (honest, not aspirational):
 | `hoplink` | NO | service not answering; adapter fails soft |
 
 A dead tunneler returns `None` and the rest keep working — `-t all` brings up
-everything it can and prints which links are live.
+everything it can and prints which links are live. During a run the CLI also
+watches the tunnel processes: if one exits (quick tunnels do drop their edge
+connection), you get a loud warning naming it rather than a silently dead link.
+
+## Campaign gating (who even sees the page)
+
+Scanners, researchers and VPN traffic pollute campaigns. Gate them out — every
+refusal is logged with its reason, so the report can state the real ratio
+("412 visits, 37 served, 375 gated out"):
+
+```bash
+# only Indian visitors, never hosting/datacenter ASNs, Mon-Fri 9-18, max 5 hits/IP/h
+./.venv/bin/python bytephisher.py -o google -t cloudflared --geo ipapi \
+    --allow-country IN --block-datacenter --active-days mon-fri --active-hours 9-18 \
+    --max-hits 5 --decoy https://real-company.example/login
+```
+
+| Flag | Effect |
+|---|---|
+| `--allow-country CC[,CC]` | serve only these ISO country codes |
+| `--block-country CC[,CC]` | never serve these |
+| `--block-datacenter` | refuse hosting/cloud ASNs (kills most automated scanning) |
+| `--active-days mon-fri` / `--active-hours 9-18` | campaign only exists in that window |
+| `--max-hits N` | refuse an IP after N hits per hour (default 3600 s window) |
+| `--decoy URL` | where gated-out visitors go (default: an inert `503 Service unavailable` page) |
+
+Failure semantics are deliberate: an **allow list** fails closed (no geo data →
+refused, since nothing proves the visitor is allowed), the **datacenter filter**
+fails open (no ISP data → served, so a geo outage never takes the campaign
+dark). The CLI warns when country/datacenter gating is combined with `--geo off`.
+Gated-out visitors are not counted as visitors, so `visitors` stays meaningful.
 
 ## Risk scoring (bot / scanner triage)
 
@@ -296,8 +331,9 @@ docker run --rm -p 8080:8080 -p 8090:8090 -v "$PWD/data:/app/data" bytephisher \
 | `tests/test_e2e.py` | standalone end-to-end: real HTTP server, real POST, real SQLite rows |
 | `tests/test_units.py` | body parsing (urlencoded/multipart/JSON/unicode), credential detection, device classification, capture DB (+concurrency, dedupe, migrations, CSV/JSON), all 179 templates, mailer rendering, alerts, tunneler URL patterns, CLI helpers, custom-site import |
 | `tests/test_http.py` | live HTTP behaviour: GET/POST variants, honeypot, timing field, forwarded-IP resolution, device detection over the wire, redirect mode, OTP flow, TLS, webhook firing end-to-end, 40 parallel submissions |
-| `tests/test_features.py` | risk engine + risk over HTTP, QR output, HTML report (incl. escaping), template rotation, alert payloads, new CLI flags, JSON/CSV export, stress tool integrity |
-| `tests/test_live.py` | real internet: geo lookup, cloudflared/localhost.run/bore tunnels with a public POST landing in SQLite, Flask dashboard API, real SMTP delivery via a local aiosmtpd sink, CLI subprocess runs with SIGINT summary, TUI live loop |
+| `tests/test_features.py` | risk engine + risk over HTTP, QR output, HTML report (incl. escaping), template rotation, alert payloads, new CLI flags, JSON/CSV export, stress tool integrity, doctor, campaign launcher |
+| `tests/test_gate.py` | gating parsers, gate logic (country/datacenter/hours/days/hit-cap), gating over real HTTP incl. decoy redirect and "refused visitors are not counted" |
+| `tests/test_live.py` | real internet: geo lookup, cloudflared/localhost.run/bore tunnels with a public POST landing in SQLite, Flask dashboard API, real SMTP delivery via a local aiosmtpd sink, public webhook echo, CLI subprocess runs with SIGINT summary, TUI live loop |
 
 Live tests skip (with a reason) when an external service is unavailable — they
 never fake a pass.

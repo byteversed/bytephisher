@@ -25,6 +25,8 @@ SUITES = [
     ("http", ["-m", "pytest", "tests/test_http.py", "-q", "--timeout=90"], "HTTP server behaviour"),
     ("features", ["-m", "pytest", "tests/test_features.py", "-q", "--timeout=120"],
      "risk scoring, QR, reports, rotation, alerts"),
+    ("gate", ["-m", "pytest", "tests/test_gate.py", "-q", "--timeout=90"],
+     "campaign gating: country / datacenter / hours / rate"),
     ("live", ["-m", "pytest", "tests/test_live.py", "-q", "--timeout=300"],
      "live internet / SMTP / tunnels"),
 ]

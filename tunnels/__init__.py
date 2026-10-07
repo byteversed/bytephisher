@@ -12,22 +12,25 @@ LOCAL_PORT_PLACEHOLDER = "{port}"
 
 # All tunneler child processes, so we can shut them down on exit instead of
 # leaving orphaned cloudflared/ssh processes behind after a session.
+# Entries are (name, Popen) so a dead tunnel can be reported by name.
 _PROCS = []
 
 
-def _bg(cmd, log_path, cwd=None):
+def _bg(cmd, log_path, cwd=None, name=None):
     # truncate: a stale log from a previous session would make _wait_url return
     # an old (dead) public URL instead of the one we just created
     log = open(log_path, "w")
     p = subprocess.Popen(cmd, stdout=log, stderr=log, cwd=cwd or os.path.dirname(log_path))
-    _PROCS.append(p)
+    # derive the tunneler name from its log file (logs/<name>.log) so a dead
+    # tunnel can be reported by name without touching every adapter
+    _PROCS.append((name or os.path.splitext(os.path.basename(log_path))[0], p))
     return p
 
 
 def stop_all():
     """Terminate every tunneler we started. Returns how many were stopped."""
     stopped = 0
-    for p in list(_PROCS):
+    for name, p in list(_PROCS):
         try:
             if p.poll() is None:
                 p.terminate()
@@ -43,8 +46,23 @@ def stop_all():
 
 
 def running():
-    """Names/pid of tunnelers still alive (for tests and status output)."""
-    return [p.pid for p in _PROCS if p.poll() is None]
+    """PIDs of tunnelers still alive (for tests and status output)."""
+    return [p.pid for _, p in _PROCS if p.poll() is None]
+
+
+def running_names():
+    """{name: pid} for live tunnelers."""
+    return {name: p.pid for name, p in _PROCS if p.poll() is None}
+
+
+def dead_names():
+    """Tunnelers we started that have since exited — a dead public URL.
+
+    Quick tunnels (cloudflared especially) can drop their edge connection and
+    exit mid-campaign; the CLI watchdog uses this to warn instead of silently
+    serving a dead link.
+    """
+    return [name for name, p in _PROCS if p.poll() is not None]
 
 def _wait_url(pattern, log_path, timeout=15):
     deadline = time.time() + timeout

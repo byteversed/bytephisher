@@ -8,6 +8,11 @@ why, with the verification evidence where a change came from a live bug.
 ### Core
 * Pure-Python threaded HTTP server (no PHP): catch-all template serving, TLS
   (`--tls --cert`), `/health`, 128-deep listen backlog.
+* `core/net.py` outbound transport: forces IPv4 resolution behind a re-entrant
+  lock. Python's urllib does no happy-eyeballs, so on a host without an IPv6
+  route a name answering with AAAA first (Cloudflare quick tunnels, many CDNs)
+  died with `Errno 101 Network is unreachable` even though IPv4 worked — this
+  broke tunnel verification and would have broken geo lookups and alerts too.
 * Body parsing for `application/x-www-form-urlencoded`, `multipart/form-data`
   (stdlib `email` parser, quoted-printable safe) and `application/json`.
 * Credential detection with exact-name list plus a substring heuristic so
@@ -41,11 +46,19 @@ why, with the verification evidence where a change came from a live bug.
   from GitHub releases), ngrok, serveo, hoplink.
 * Child processes are tracked and terminated on exit; tunnel logs are truncated
   per start so a stale public URL can never be reported as live.
+* Tunnel watchdog in the live loop: if a tunneler exits mid-campaign the CLI
+  prints a loud warning naming it, instead of silently serving a dead link
+  (`tunnels.dead_names()` / `running_names()`).
 * Verified live in this build: cloudflared, localhost.run, bore. Dead services
   (serveo, hoplink) and unconfigured ngrok fail soft and are reported honestly.
 
 ### Campaign engineering
 * `--campaign` tagging, `--rotate a,b,c` A/B template rotation per request.
+* Campaign gating: country allow/deny, datacenter-ASN refusal, active
+  hours/weekdays, per-IP hit cap, decoy redirect. Refusals are logged with
+  reasons (`blocked` table) and reported, and a gated visitor is not counted as
+  a served visitor. Allow-list rules fail closed, the datacenter filter fails
+  open (documented, so a geo outage cannot take a campaign dark).
 * Risk scoring 0–100 with reasons: automation user-agents, datacenter/hosting
   ISPs, filled honeypot, inhumanly fast submits, unrecognised devices, missing
   geo. Reports expose "credible (low risk)" counts next to raw credential

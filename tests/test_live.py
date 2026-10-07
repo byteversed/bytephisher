@@ -45,12 +45,15 @@ needs_net = pytest.mark.skipif(not online(), reason="no outbound network in this
 
 
 def fetch(url, timeout=25, attempts=8, delay=5, allow_codes=()):
-    """GET a URL with retries (quick tunnels 530 until the edge registers)."""
+    """GET a URL with retries (quick tunnels 530 until the edge registers).
+    IPv4-preferring: hosts that publish AAAA records fail with Errno 101 on a
+    box with no IPv6 route (see core/net.py)."""
+    from core import net
     last = None
     for _ in range(attempts):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (probe)"})
-            with urllib.request.urlopen(req, timeout=timeout) as r:
+            with net.urlopen(url, timeout=timeout,
+                             headers={"User-Agent": "Mozilla/5.0 (probe)"}) as r:
                 return r.status, r.read().decode("utf-8", "replace")
         except urllib.error.HTTPError as e:
             last = e
@@ -65,12 +68,13 @@ def fetch(url, timeout=25, attempts=8, delay=5, allow_codes=()):
 
 
 def post(url, data, headers=None, timeout=25):
+    from core import net
     body = urllib.parse.urlencode(data).encode()
     h = {"Content-Type": "application/x-www-form-urlencoded",
          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     h.update(headers or {})
     req = urllib.request.Request(url, data=body, headers=h)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with net.urlopen(req, timeout=timeout) as r:
         return r.status
 
 
@@ -136,7 +140,7 @@ class TestGeoLive:
 @needs_net
 class TestTunnelLive:
     def test_cloudflared_full_chain(self):
-        from tunnels import run_one, stop_all, running
+        from tunnels import run_one, stop_all, running, dead_names
         s = LocalServer(geo="ipapi")
         try:
             url = run_one("cloudflared", s.port)
@@ -145,8 +149,26 @@ class TestTunnelLive:
             status, body = fetch(url)
             assert status == 200 and "Log in to Google" in body
 
-            post(url + "/", {"email": "cf_live@example.com", "password": "CfLive1!",
-                             "_tpl": "google"})
+            # Quick tunnels can drop their edge connection mid-test (the tunnel
+            # process exits). Retry, restart the tunnel if it died, and only
+            # then report the environment as the blocker.
+            last_err = None
+            for _ in range(3):
+                try:
+                    post(url + "/", {"email": "cf_live@example.com", "password": "CfLive1!",
+                                     "_tpl": "google"})
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    if dead_names():
+                        stop_all()
+                        url = run_one("cloudflared", s.port) or url
+                    time.sleep(3)
+            if last_err is not None:
+                pytest.skip(f"cloudflared tunnel dropped mid-test after retries: "
+                            f"{type(last_err).__name__}: {last_err}")
+
             time.sleep(1.5)
             rows = s.db.all()
             assert rows, "capture never reached the DB through the tunnel"
@@ -217,8 +239,9 @@ class TestPublicWebhook:
         req = urllib.request.Request("https://httpbin.org/post", data=payload,
                                      headers={"Content-Type": "application/json",
                                               "User-Agent": "bytephisher/1.0"})
+        from core import net
         try:
-            with urllib.request.urlopen(req, timeout=25) as r:
+            with net.urlopen(req, timeout=25) as r:
                 echoed = json.loads(r.read())
         except Exception as e:
             pytest.skip(f"public echo endpoint unavailable: {type(e).__name__}: {e}")

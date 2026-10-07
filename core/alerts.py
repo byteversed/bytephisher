@@ -36,12 +36,9 @@ def format_capture(c):
     return "\n".join(lines)
 
 def _post_json(url, payload, timeout=8):
-    data = json.dumps(payload).encode()
-    req = urllib.request.Request(url, data=data,
-                                 headers={"Content-Type": "application/json",
-                                          "User-Agent": "bytephisher/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.status, r.read()[:400]
+    """POST JSON via the IPv4-preferring transport (see core/net.py)."""
+    from . import net
+    return net.post_json(url, payload, timeout=timeout)
 
 TELEGRAM_API_BASE = "https://api.telegram.org"   # overridable for tests
 

@@ -365,6 +365,70 @@ class TestAlerts:
             stub.stop()
 
 
+# ========================================================== net helpers =====
+class TestNetHelpers:
+    """core/net.py: outbound calls must prefer IPv4 (a box with no IPv6 route
+    fails with Errno 101 when a name answers with AAAA first)."""
+
+    def test_ipv4_only_patches_and_restores_getaddrinfo(self):
+        import socket as _socket
+        from core import net
+        original = _socket.getaddrinfo
+        with net.ipv4_only() as ctx:
+            assert _socket.getaddrinfo is not original
+            infos = _socket.getaddrinfo("localhost", 80, proto=_socket.IPPROTO_TCP)
+            assert all(f[0] == _socket.AF_INET for f in infos)
+        assert _socket.getaddrinfo is original          # always restored
+
+    def test_ipv4_only_is_reentrant_and_threadsafe(self):
+        import socket as _socket
+        from core import net
+        original = _socket.getaddrinfo
+        with net.ipv4_only():
+            with net.ipv4_only():
+                assert _socket.getaddrinfo is not original
+        assert _socket.getaddrinfo is original
+
+    def test_ipv4_only_restores_on_exception(self):
+        import socket as _socket
+        from core import net
+        original = _socket.getaddrinfo
+        try:
+            with net.ipv4_only():
+                raise RuntimeError("boom")
+        except RuntimeError:
+            pass
+        assert _socket.getaddrinfo is original
+
+    def test_fetch_json_and_post_json_against_local_stub(self):
+        from conftest import StubHTTP
+        from core import net
+        stub = StubHTTP(body=b'{"ok": true, "n": 7}')
+        try:
+            data = net.fetch_json(stub.url)
+            assert data["ok"] is True and data["n"] == 7
+            status, body = net.post_json(stub.url, {"capture": {"ip": "1.2.3.4"}})
+            assert status == 200
+            assert len(stub.received) == 2
+            sent = json.loads(stub.received[1]["body"])
+            assert sent["capture"]["ip"] == "1.2.3.4"
+            assert stub.received[1]["ct"] == "application/json"
+        finally:
+            stub.stop()
+
+    def test_ipv6_available_returns_bool(self):
+        from core import net
+        assert isinstance(net.ipv6_available(timeout=2), bool)
+
+    def test_geo_lookup_uses_net_layer(self):
+        """The geo path must not bypass core/net (that was the Errno 101 bug)."""
+        import inspect
+        from core import server as _srv
+        src = inspect.getsource(_srv.make_handler)
+        assert "net.fetch_json" in src
+        assert "urllib.request.urlopen" not in src
+
+
 # ============================================================= tunnels =======
 class TestTunnels:
     def test_registry_has_six(self):
@@ -411,6 +475,24 @@ class TestTunnels:
         t = REGISTRY["ngrok"](free_port())
         if not t._resolve(["ngrok"]):
             assert t.start() is None
+
+    def test_running_and_dead_names_track_children(self):
+        """The CLI watchdog needs to know which tunneler died."""
+        import tempfile
+        import time as _t
+        from tunnels import _bg, running_names, dead_names, stop_all
+        d = tempfile.mkdtemp()
+        alive_log = os.path.join(d, "alive.log")
+        dies_log = os.path.join(d, "dies.log")
+        stop_all()
+        _bg([sys.executable, "-c", "import time; time.sleep(30)"], alive_log)
+        _bg([sys.executable, "-c", "pass"], dies_log)
+        _t.sleep(1.0)
+        assert "alive" in running_names()
+        assert "dies" in dead_names()
+        assert "alive" not in dead_names()
+        assert stop_all() >= 1
+        assert running_names() == {}
 
 
 # ================================================================= CLI =======

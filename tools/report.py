@@ -110,6 +110,16 @@ def build_report(db_path, out_path=None, campaign=None, title=None,
     detail = "".join(detail_rows) or "<tr><td colspan='8'>no captures yet</td></tr>"
 
     timeline = _bars(hourly, len(rows), limit=24)
+    try:
+        blocked = db.blocked_stats()
+    except Exception:
+        blocked = {"total_blocked": 0, "by_reason": []}
+    blocked_rows = "".join(
+        f"<tr><td>{_esc(b['reason'])}</td><td>{b['count']}</td></tr>"
+        for b in blocked["by_reason"]) or "<tr><td>nothing gated out</td><td>0</td></tr>"
+    blocked_block = f"""
+<h2>Gated out ({blocked['total_blocked']})</h2>
+<table><thead><tr><th>Reason</th><th>Count</th></tr></thead><tbody>{blocked_rows}</tbody></table>""" if blocked["total_blocked"] else ""
     qr_block = ""
     if qr_url:
         png = links.qr_png(qr_url, path=os.path.join(os.path.dirname(out_path or ".") or ".",
@@ -156,6 +166,8 @@ database <code>{_esc(os.path.basename(db_path))}</code>{' · campaign <code>%s</
 </div>
 
 {qr_block}
+
+{blocked_block}
 
 <h2>Captured submissions ({len(rows)})</h2>
 <table><thead><tr><th>Time</th><th>Campaign</th><th>IP</th><th>Geo</th>

@@ -135,6 +135,23 @@ def main(argv=None):
     except Exception as e:
         _check(r, "can bind a port", BAD, str(e))
 
+    # --- outbound network + IPv6 honesty ---
+    try:
+        from core import net
+        try:
+            with net.urlopen("https://ipapi.co/8.8.8.8/json/", timeout=6) as resp:
+                _check(r, "outbound https", OK, f"status {resp.status}")
+        except Exception as e:
+            _check(r, "outbound https", WARN, f"{type(e).__name__}: {e}")
+        if net.ipv6_available():
+            _check(r, "ipv6 route", OK, "IPv6 reachable (IPv4 still preferred)")
+        else:
+            _check(r, "ipv6 route", WARN,
+                   "no IPv6 route — outbound calls prefer IPv4 (core/net.py) "
+                   "so AAAA-only hosts still work")
+    except Exception as e:
+        _check(r, "outbound https", WARN, f"{type(e).__name__}: {e}")
+
     fails = [x for x in r if x["status"] == BAD]
     warns = [x for x in r if x["status"] == WARN]
 
