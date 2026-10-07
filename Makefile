@@ -2,7 +2,7 @@
 PY := ./.venv/bin/python
 PIP := ./.venv/bin/pip
 
-.PHONY: help venv install templates test test-fast lint run report clean distclean
+.PHONY: help venv install templates test test-fast lint run report pdf clean distclean
 
 help:
 	@echo "make install      create .venv, install deps, generate templates"
@@ -11,7 +11,9 @@ help:
 	@echo "make test-fast    skip the live suite"
 	@echo "make run          local-only run on :8080 (no tunnel)"
 	@echo "make report       write data/report.html from the capture DB"
+	@echo "make pdf          write data/report.pdf (dark theme, evidence labels)"
 	@echo "make probe        probe every tunneler against the real internet"
+	@echo "make doctor       check this machine can run a campaign"
 	@echo "make clean        remove caches/artifacts (keeps data/ and templates/)"
 	@echo "make distclean    also remove .venv, data/, logs/, templates/"
 
@@ -38,8 +40,14 @@ run:
 report:
 	$(PY) tools/report.py --out data/report.html
 
+pdf:
+	$(PY) tools/report_pdf.py --out data/report.pdf
+
 probe:
 	$(PY) tools/probe_tunnels.py
+
+doctor:
+	$(PY) bytephisher.py --doctor
 
 clean:
 	rm -rf **/__pycache__ .pytest_cache logs/*.log

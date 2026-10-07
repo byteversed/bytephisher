@@ -397,6 +397,83 @@ class TestNewCLIFlags:
                 proc.kill()
 
 
+# ========================================================== pdf report =======
+class TestPDFReport:
+    @pytest.fixture()
+    def populated_db(self):
+        path = os.path.join(tempfile.mkdtemp(), "pdf.db")
+        db = cap.CaptureDB(path)
+        db.record("/", "203.0.113.5", "Mumbai", "India", "Jio", "UA", "android",
+                  {"email": "human@corp.com", "password": "p1", "_ts": "9000"}, True,
+                  campaign="q3-payroll", risk=0, risk_reasons=[])
+        db.record("/", "198.51.100.9", "Frankfurt", "Germany", "Hetzner", "curl/8",
+                  "linux", {"email": "bot@corp.com", "password": "p2"}, True,
+                  campaign="q3-payroll", risk=75,
+                  risk_reasons=["automation signature in user-agent (curl/)"])
+        db.record("/otp", "203.0.113.5", "Mumbai", "India", "Jio", "UA", "android",
+                  {"otp_1": "1", "otp_2": "2"}, False, campaign="q3-payroll", risk=0)
+        db.log_blocked("198.51.100.1", "RU", "datacenter network (OVH SAS)")
+        yield path, db
+        db.close()
+
+    def test_pdf_written_with_expected_content(self, populated_db):
+        pytest.importorskip("reportlab")
+        from pypdf import PdfReader
+        path, _db = populated_db
+        out = os.path.join(tempfile.mkdtemp(), "r.pdf")
+        from tools.report_pdf import build_report_pdf
+        res = build_report_pdf(path, out, title="Test campaign")
+        assert os.path.isfile(out) and os.path.getsize(out) > 2000
+        assert res["pages"] >= 3, res
+        assert res["rows"] == 3
+        text = "\n".join((p.extract_text() or "") for p in PdfReader(out).pages)
+        for needle in ("SUBMISSIONS", "CREDENTIAL PAIRS", "CREDIBLE", "Test campaign",
+                       "Geography", "Devices", "Timeline", "Gated out",
+                       "datacenter network (OVH SAS)"):
+            assert needle in text, needle
+        # evidence labels: one human credential, one automated credential, one OTP
+        assert "CONFIRMED" in text and "SUSPECTED" in text and "OTP ONLY" in text
+        # the captured addresses are present, and nothing is over-claimed
+        assert "human@corp.com" in text and "bot@corp.com" in text
+        assert "victim" not in text.lower()
+
+    def test_pdf_campaign_filter(self, populated_db):
+        pytest.importorskip("reportlab")
+        from pypdf import PdfReader
+        path, _db = populated_db
+        out = os.path.join(tempfile.mkdtemp(), "q3.pdf")
+        from tools.report_pdf import build_report_pdf
+        res = build_report_pdf(path, out, campaign="q3-payroll")
+        text = "\n".join((p.extract_text() or "") for p in PdfReader(out).pages)
+        assert res["rows"] == 3 and "human@corp.com" in text
+
+    def test_pdf_with_qr(self, populated_db):
+        pytest.importorskip("reportlab")
+        pytest.importorskip("segno")
+        path, _db = populated_db
+        out = os.path.join(tempfile.mkdtemp(), "qr.pdf")
+        from tools.report_pdf import build_report_pdf
+        build_report_pdf(path, out, qr_url="https://example.trycloudflare.com/")
+        assert os.path.isfile(os.path.join(os.path.dirname(out), "campaign_qr.png"))
+
+    def test_pdf_empty_db_does_not_crash(self):
+        pytest.importorskip("reportlab")
+        path = os.path.join(tempfile.mkdtemp(), "empty.db")
+        cap.CaptureDB(path).close()
+        out = os.path.join(tempfile.mkdtemp(), "empty.pdf")
+        from tools.report_pdf import build_report_pdf
+        res = build_report_pdf(path, out)
+        assert res["rows"] == 0 and res["pages"] >= 1 and os.path.getsize(out) > 1000
+
+    def test_cli_pdf_flag(self, populated_db):
+        pytest.importorskip("reportlab")
+        out = os.path.join(tempfile.mkdtemp(), "cli.pdf")
+        p = subprocess.run([PY, os.path.join(HERE, "bytephisher.py"), "--pdf", out],
+                           cwd=HERE, capture_output=True, text=True, timeout=120)
+        assert p.returncode == 0, p.stdout + p.stderr
+        assert "pdf written" in p.stdout and os.path.isfile(out)
+
+
 # ========================================================== data export ======
 class TestDataExport:
     def test_json_export_written_and_parseable(self):

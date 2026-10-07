@@ -104,6 +104,7 @@ No PHP, no web server, no external binaries except the tunnel client you pick
 | `--decoy URL` | where gated-out visitors are sent (default: inert 503) |
 | `--qr [PATH]` | save a QR code PNG of the live link (default `data/qr.png`) |
 | `--report PATH` | write a self-contained HTML campaign report and exit |
+| `--pdf PATH` | write a dark-theme PDF campaign report (CONFIRMED/SUSPECTED labels) and exit |
 | `--export PATH` | dump captures (`.json` → JSON, anything else → CSV) and exit |
 | `--no-tui` | plain refresh output instead of the full-screen dashboard |
 
@@ -213,15 +214,30 @@ curl -s 'localhost:8090/api/stats?campaign=q4-ab-test'
 ## Reports and QR codes
 
 ```bash
-./.venv/bin/python bytephisher.py --report data/report.html      # whole DB
+./.venv/bin/python bytephisher.py --report data/report.html      # whole DB (HTML)
+./.venv/bin/python bytephisher.py --pdf data/report.pdf          # whole DB (PDF)
 ./.venv/bin/python tools/report.py --campaign q3-payroll --out data/q3.html \
         --qr https://<tunnel>/          # embeds campaign_qr.png next to the report
 ./.venv/bin/python bytephisher.py --qr data/qr.png               # during a live run
 ```
 
-The report is a single HTML file: KPIs, campaign table, geography / device /
-ISP distributions, hourly timeline and every submission with risk reasons. No
-CDN, no JS, opens offline, prints to PDF.
+**HTML report** — a single file: KPIs, campaign table, geography / device / ISP
+distributions, hourly timeline and every submission with risk reasons. No CDN,
+no JS, opens offline, prints to PDF.
+
+**PDF report** (`tools/report_pdf.py`) — A4, dark theme, built for client
+delivery. Each submission carries an evidence label, never an overclaim:
+
+| Label | Meaning |
+|---|---|
+| **CONFIRMED** | credential pair from a low-risk (human-looking) source |
+| **SUSPECTED** | credential pair that looks automated or datacenter-sourced |
+| **OTP ONLY** | a verification-code submission without a credential pair |
+| **FIELDS** | other field submissions |
+
+Sections: KPIs (submissions / credential pairs / credible / visitors), campaign
+breakdown, gated-out reasons, geography + devices + networks, hourly timeline,
+optional QR of the campaign link, then the full submission table.
 
 ## Load testing your own instance
 

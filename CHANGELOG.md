@@ -72,6 +72,11 @@ why, with the verification evidence where a change came from a live bug.
   swallowed so a dead webhook can never break a capture).
 * Self-contained HTML campaign report (KPIs, campaigns, geo/device/ISP bars,
   hourly timeline, risk-labelled rows, optional QR) via `tools/report.py`.
+* PDF campaign report (`tools/report_pdf.py`, `--pdf`): A4 dark theme for client
+  delivery, with conservative evidence labels per submission — CONFIRMED
+  (credential pair, low risk), SUSPECTED (credential pair, automated/datacenter),
+  OTP ONLY, FIELDS — plus campaign breakdown, gated-out reasons, distributions,
+  timeline and optional QR.
 * QR code generation (PNG/SVG/terminal) for the live link.
 * Email module: 4 templates, variable substitution, HTML rendering, 1x1
   `/px.gif` open-tracking pixel served by the tool itself.

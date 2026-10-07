@@ -5,3 +5,5 @@ pyyaml>=6.0
 flask>=3.0
 websocket-client>=1.6
 segno>=1.6
+reportlab>=4.0
+pypdf>=4.0
