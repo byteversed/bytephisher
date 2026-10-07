@@ -1,0 +1,19 @@
+# runtime artifacts
+data/
+logs/
+bin/
+*.db
+*.db-wal
+*.db-shm
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# generated templates (regenerate with tools/gen_templates.py)
+templates/
+
+# secrets
+config/config.local.yaml

