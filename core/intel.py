@@ -325,8 +325,14 @@ def device_token(mods):
 
 
 def summarize(mods, ua="", server_ip="", geo_country=""):
-    """One normalised record: everything a human wants to read, plus the raw map."""
-    ua = ua or _pick(mods, "nav.ua", default="") or ""
+    """One normalised record: everything a human wants to read, plus the raw map.
+
+    The UA the *browser* reported wins over the HTTP header: a proxy, a privacy
+    extension or a scripted client can send any header, while `navigator.userAgent`
+    is what the page actually sees. (Found live: a short header UA made a real
+    Chrome/Mac profile classify as "unknown".)
+    """
+    ua = _pick(mods, "nav.ua", default="") or ua or ""
     hl, hl_reasons = headless_score(mods, ua)
     vpn, vpn_reasons = vpn_assessment(mods, server_ip, geo_country, ua)
     auto = _pick(mods, "automation", default={}) or {}

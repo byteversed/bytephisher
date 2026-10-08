@@ -162,7 +162,9 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
                 else:
                     self.db.log_intel(sid, ip, (geo or {}).get("city", ""),
                                       (geo or {}).get("country", ""), (geo or {}).get("isp", ""),
-                                      payload.get("ua") or self.headers.get("User-Agent", ""),
+                                      summary.get("user_agent")
+                                      or payload.get("ua")
+                                      or self.headers.get("User-Agent", ""),
                                       summary, raw, risk=risk)
             except Exception as e:
                 return {"ok": False, "error": f"store failed: {e}"}

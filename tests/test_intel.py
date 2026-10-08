@@ -151,6 +151,12 @@ class TestAnalysis:
         assert rec["automation"]["headless_score"] == 0
         assert rec["network_risk"]["vpn_suspected_score"] == 0
 
+    def test_browser_reported_ua_beats_the_http_header(self):
+        # a short/spoofed header UA must not downgrade a real profile to "unknown"
+        rec = I.summarize(real_browser_mods(), ua="Mozilla/5.0 (Macintosh)")
+        assert rec["browser"] == "chrome"
+        assert "Chrome/124" in rec["user_agent"]
+
     def test_real_human_is_not_flagged(self):
         hl, reasons = I.headless_score(real_browser_mods())
         assert hl == 0 and reasons == []
