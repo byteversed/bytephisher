@@ -4,17 +4,32 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bytephisher"
-version = "1.0.4"
+version = "0.1.0"
 description = "Advanced phishing-simulation framework for authorized security-awareness and red-team engagements"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "MIT" }
+license = { file = "LICENSE" }
 authors = [{ name = "BytePhisher contributors" }]
-keywords = ["security", "phishing-simulation", "awareness", "red-team", "pentest"]
+keywords = [
+    "security",
+    "phishing-simulation",
+    "security-awareness",
+    "red-team",
+    "pentest",
+    "reverse-proxy",
+]
 classifiers = [
-    "Programming Language :: Python :: 3",
-    "Topic :: Security",
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
     "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
 ]
 dependencies = [
     "rich>=13.0",
@@ -26,8 +41,8 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-pdf = ["reportlab>=4.0", "pypdf>=4.0"]
 test = ["pytest>=8.0", "pytest-timeout>=2.3", "aiosmtpd>=1.4"]
+dev = ["pytest>=8.0", "pytest-timeout>=2.3", "aiosmtpd>=1.4", "ruff>=0.6"]
 
 [project.scripts]
 bytephisher = "bytephisher:main"
@@ -43,7 +58,37 @@ packages = ["core", "tunnels", "dashboard", "mailer", "tools"]
 [tool.setuptools.package-data]
 core = ["../config/*.yaml"]
 "*" = ["*.json"]
+# the browser-side collector is a data file, not a python module
+bytephisher = ["assets/*.js"]
+assets = ["*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 timeout = 300
+# markers let you run one tier at a time:
+#   pytest -m unit          fast, no network
+#   pytest -m integration   local servers/subprocesses
+#   pytest -m live          real internet (tunnels, geo, SMTP)
+markers = [
+    "unit: no network, no subprocesses, milliseconds to seconds",
+    "integration: local sockets, temp databases, subprocess CLI runs",
+    "live: touches the real internet (tunnels, geo APIs, SMTP sink)",
+    "slow: takes more than ~10s on a normal machine",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:flask.*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [".venv", "templates", "data", "logs"]
+
+[tool.ruff.lint]
+# pragmatic set: real bugs first, style second. E501 stays off because the
+# reports and templates carry long literal lines on purpose.
+select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]
+ignore = ["E501", "SIM108", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011", "SIM117"]

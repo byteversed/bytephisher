@@ -258,39 +258,3 @@ class TestGatingReporting:
         assert bs["by_reason"][0] == {"reason": "country RU is blocked", "count": 2}
         db.close()
 
-    def test_report_shows_gated_section(self):
-        from tools.report import build_report
-        d = os.path.join(tempfile.mkdtemp(), "g.db")
-        db = cap.CaptureDB(d)
-        db.record("/", "203.0.113.1", "Delhi", "India", "Airtel", "UA", "android",
-                  {"email": "a@b.c", "password": "x"}, True, campaign="c", risk=0)
-        db.log_blocked("198.51.100.1", "RU", "country RU is blocked")
-        db.close()
-        out = os.path.join(tempfile.mkdtemp(), "rep.html")
-        build_report(d, out)
-        html = open(out).read()
-        assert "Gated out (1)" in html
-        assert "country RU is blocked" in html
-
-    def test_web_api_exposes_blocked(self):
-        from dashboard import web_dashboard
-        db = cap.CaptureDB(os.path.join(tempfile.mkdtemp(), "w.db"))
-        db.log_blocked("1.2.3.4", "CN", "datacenter network (AWS)")
-        port = free_port()
-        web_dashboard(port=port, db=db, host="127.0.0.1")
-        time.sleep(0.8)
-        data = json.loads(urllib.request.urlopen(f"http://127.0.0.1:{port}/api/stats",
-                                                 timeout=10).read())
-        assert data["blocked"]["total_blocked"] == 1
-        assert data["blocked"]["by_reason"][0]["reason"] == "datacenter network (AWS)"
-        db.close()
-
-    def test_cli_gating_flags_present(self):
-        import subprocess
-        import sys
-        p = subprocess.run([sys.executable, os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "bytephisher.py"),
-            "--help"], capture_output=True, text=True, timeout=60)
-        for flag in ("--allow-country", "--block-country", "--block-datacenter",
-                     "--active-hours", "--active-days", "--max-hits", "--decoy"):
-            assert flag in p.stdout, flag

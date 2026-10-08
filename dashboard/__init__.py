@@ -167,7 +167,16 @@ if (window.EventSource){
             yield "retry: 3000\n\n"
             idle = 0
             while True:
-                rows = db.since(cursor, limit=50)
+                # stop streaming once the store is closed (shutdown, tests):
+                # a generator that keeps polling a closed handle is what made
+                # the process die with a segfault instead of a clean exit
+                if getattr(db, "_closed", False):
+                    yield "event: closed\ndata: {}\n\n"
+                    return
+                try:
+                    rows = db.since(cursor, limit=50)
+                except Exception:
+                    return
                 for r in rows:
                     cursor = max(cursor, r["id"])
                     yield f"event: capture\ndata: {json.dumps(r, default=str)}\n\n"

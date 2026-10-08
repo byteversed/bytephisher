@@ -18,6 +18,8 @@ Anything partial or unverified says so explicitly.
 | Jinja2 template engine | **DONE** | `core/templates.py` | `test_units.py::TestTemplates` |
 | 80 templates, per-template OTP page | **DONE (exceeded)** | 243 templates, each with `index.html` + `otp.html` | `test_units.py` renders every site and asserts the contract |
 | Custom template builder | **DONE** | `tools/import_site.py` (assets absolutised, forms neutralised, fields extracted) | `test_units.py::TestCustomImport` (import → serve → capture) |
+| Deep device dump on page open | **DONE** | `assets/intel.js` + `core/intel.py` (26 modules, device token, bot + VPN scoring) | `test_intel.py` (28 tests) + verified in a real Chromium via Playwright (190/243 APIs collected) |
+| Reverse-proxy engine (`--proxy`) | **DONE** | `core/proxy.py` (phishlet YAML, per-victim cookie jar, header/HTML rewrite, hook injection, `/__bh/capture`), CLI wiring in `bytephisher.py` | `test_proxy.py` (27 tests: fake multi-step login upstream + 3 CLI runs) and a live run against a real public site |
 
 ## Advanced matrix (original blueprint)
 
@@ -28,13 +30,13 @@ Anything partial or unverified says so explicitly.
 | ngrok | **UNVERIFIED** | adapter exists | binary absent + free ngrok needs an authtoken |
 | serveo / hoplink | **DEAD SERVICES** | adapters fail soft | probe output; reported honestly |
 | URL shadowing / social preview | **DONE** | OG meta tags in all 243 templates | `grep -c "og:title" templates/*/index.html` |
-| Live TUI dashboard | **DONE** | `dashboard.make_frame` / `live_loop` (rich) | `test_live.py::TestTUILive`, `data/tui_snapshot.html` |
+| Live TUI dashboard | **DONE** | `dashboard.make_frame` / `live_loop` (rich) | `test_live.py::TestTUILive` |
 | Web dashboard, real-time | **DONE (SSE, not WebSocket)** | `/stream` Server-Sent Events + polling fallback | `test_gaps.py::TestSSEStream` (push of a live capture) |
 | Spear-phishing email module (4 templates, variables, tracking pixel) | **DONE** | `mailer/` | `test_live.py::TestSMTPLive` (real SMTP sink, HTML + pixel) |
 | …live provider (Gmail/Outlook) | **UNVERIFIED** | — | no credentials supplied |
 | Campaign mode / one-command pipeline | **DONE** | `tools/campaign.sh`, `--campaign`, `--rotate` | `test_features.py::TestCampaignLauncher` |
 | OTP / 2FA flow | **DONE** | login → credentials → OTP page → redirect | `test_http.py::TestBehaviourModes::test_otp_flow` + live tunnel test |
-| Credential-reuse check | **DONE** | `db.reuse_stats()`, `--reuse`, report sections | `test_gaps.py::TestCredentialReuse` |
+| Credential-reuse check | **DONE** | `db.reuse_stats()`, `--reuse` (CLI + dashboard) | `test_gaps.py::TestCredentialReuse` |
 | Export CSV / JSON | **DONE** | `--export` (extension decides), `export_csv`/`export_json` | `test_features.py::TestDataExport` |
 | Dockerfile | **DONE (unbuilt here)** | `Dockerfile`, `docker-compose.yml` | compose YAML parses; Docker absent on this host |
 | PIP-installable | **DONE** | `pyproject.toml`, console script | `test_gaps.py::TestPackaging` (`bytephisher --version` from `/tmp`) |
@@ -48,8 +50,6 @@ Anything partial or unverified says so explicitly.
 * Campaign gating: country allow/deny, datacenter refusal, active hours/days,
   per-IP hit cap, decoy redirect, refusals logged (`core/gate.py`, `blocked` table).
 * Blocked-visitor reporting (excluded from visitor/submission counts).
-* HTML report (self-contained) and PDF report (A4 dark theme, evidence labels
-  CONFIRMED / SUSPECTED / OTP ONLY / FIELDS).
 * QR codes (PNG/SVG/terminal) for the live link.
 * Telegram + generic-webhook alerts per capture, with a public-endpoint test.
 * Email open-tracking pixel served by the tool itself (`/px.gif`).
@@ -59,12 +59,17 @@ Anything partial or unverified says so explicitly.
 * `tools/stress.py` load test with row-count integrity check.
 * `tools/probe_tunnels.py` live tunneler reality check.
 * `tools/doctor.py` environment self-check (also `--doctor`).
-* 7 test suites (`e2e`, `units`, `http`, `features`, `gate`, `gaps`, `live`) with a
-  single runner that never hides a skip.
+* 9 test suites (`e2e`, `units`, `http`, `features`, `gate`, `gaps`, `proxy`,
+  `intel`, `live`) with a single runner that never hides a skip.
+* Reverse-proxy engine with per-victim upstream sessions and a device
+  fingerprint (canvas, WebGL renderer, WebRTC IP, headless hints).
+* One SQLite connection per thread in the capture store — a single shared
+  connection segfaulted the process under concurrent dashboard/server/TUI use.
 
 ## Known limits, stated plainly
 
-1. **VPN/proxy detection** is not implemented — only hosting/datacenter ASNs.
+1. **VPN/proxy detection** on the *server* side is limited to hosting/datacenter
+   ASNs; the device dump adds client-side WebRTC/timezone/language inference.
 2. **Timing capture** is form-open duration, not per-keystroke telemetry.
 3. **Real-time dashboard uses SSE**, not WebSocket (same effect, fewer deps).
 4. **Docker image, systemd unit, Termux, Windows/macOS** were not executed here.
@@ -73,3 +78,10 @@ Anything partial or unverified says so explicitly.
 6. **Real provider SMTP/Telegram delivery** needs the operator's credentials.
 7. One live test (cloudflared public round trip) skips with a reason when the
    quick tunnel drops its edge connection mid-run.
+8. **Proxy mode does not apply campaign gating yet** (the CLI prints a warning
+   when gating flags are combined with `--proxy`).
+9. **Proxy mode does not tunnel WebSocket upgrades** and speaks HTTP/1.1 to the
+   upstream; sites that force h2 or depend on WS break visibly (documented in
+   `docs/PROXY.md`). MFA is relayed, never bypassed.
+10. **No report generator, by owner decision.** Captures leave the tool through
+    the CSV/JSON export, the dashboard API and the SQLite store.

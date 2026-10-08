@@ -1,7 +1,8 @@
 # BytePhisher — testing guide
 
-Four tiers, one runner. Nothing is mocked where it can be real: the HTTP tier
-drives sockets, the live tier drives the public internet.
+Eight suites, one runner. Nothing is mocked where it can be real: the HTTP tier
+drives sockets, the proxy tier drives a real upstream login flow, the live tier
+drives the public internet.
 
 ```bash
 make test                                    # everything (needs the internet)
@@ -17,9 +18,10 @@ make test-fast                               # skip the live tier
 | `test_e2e.py` | `python tests/test_e2e.py` | standalone end-to-end: real server, real POST, real SQLite row, redirect mode, OTP page, CSV export, plain dashboard |
 | `test_units.py` | `pytest tests/test_units.py` | pure logic: body parsing (urlencoded / multipart / JSON / unicode / empty), credential detection, device classification, capture DB (+concurrency, dedupe, migrations, CSV), all generated templates, mailer rendering, alert formatters, tunneler URL patterns, CLI helpers, custom-site import |
 | `test_http.py` | `pytest tests/test_http.py` | live HTTP: GET/POST variants, honeypot + timing fields, forwarded-IP precedence, device detection over the wire, redirect mode, OTP flow, TLS, webhook firing, 40 parallel submissions |
-| `test_features.py` | `pytest tests/test_features.py` | risk engine + risk over HTTP, QR output, HTML report (incl. escaping), PDF report (labels, campaign filter, QR, empty DB, CLI flag), template rotation, alert payloads, new CLI flags, JSON/CSV export, stress-tool integrity, doctor, campaign launcher, tunnel watchdog |
+| `test_features.py` | `pytest tests/test_features.py` | risk engine + risk over HTTP, QR output, template rotation, alert payloads, new CLI flags, JSON/CSV export, stress-tool integrity, doctor, campaign launcher, tunnel watchdog |
 | `test_gate.py` | `pytest tests/test_gate.py` | gating parsers and logic (country allow/deny, datacenter, active hours/days, per-IP hit cap), gating over real HTTP, decoy redirect, refused visitors not counted |
-| `test_gaps.py` | `pytest tests/test_gaps.py` | packaging/pip console script + library import + `BYTEPHISHER_HOME`, SSE `/stream` push of a live capture + polling fallback, update check (stub, cache, CLI), credential-reuse detection in DB/CLI/HTML/PDF |
+| `test_gaps.py` | `pytest tests/test_gaps.py` | packaging/pip console script + library import + `BYTEPHISHER_HOME`, SSE `/stream` push of a live capture + polling fallback, update check (stub, cache, CLI), credential-reuse detection in DB/CLI/dashboard |
+| `test_proxy.py` | `pytest tests/test_proxy.py` | reverse-proxy engine against a fake upstream that reproduces a real multi-step login (GET login → POST → 302 → cookie-protected dashboard): header/HTML rewriting, SRI + CSP stripping, hook injection, per-victim cookie isolation, credential/cookie/fingerprint capture, risk model, session resolution from payload/cookie/query, malformed + empty bodies rejected, upstream 500/down, inject/block rules, unicode and 50 KB field values, 12-way concurrency, HEAD, query strings, phishlet YAML — plus three CLI-level `--proxy` runs with an isolated `BYTEPHISHER_HOME` |
 | `test_live.py` | `pytest tests/test_live.py` | real internet: geo lookups, cloudflared / localhost.run / bore public round-trips with captures landing in SQLite, Flask dashboard API, SMTP delivery into a local aiosmtpd sink, public webhook echo, CLI subprocess runs (incl. SIGINT session summary), TUI live loop |
 
 Live tests **skip with a reason** when a service is unavailable; they never fake
@@ -34,6 +36,11 @@ a pass. The runner prints skips explicitly instead of hiding them.
 * SMTP tests run a real SMTP server on localhost (`aiosmtpd`) and assert the
   received message headers/body, including the tracking pixel in the HTML part.
 * CLI tests spawn the actual CLI as a subprocess and parse its stdout.
+* Anything that runs the real CLI points `BYTEPHISHER_HOME` at a temp directory,
+  so the developer database (`data/bytephisher.db`) is never touched.
+* The store keeps **one SQLite connection per thread**; a regression test runs
+  parallel readers against parallel writers and closes the store mid-flight,
+  because sharing one connection segfaulted the process (see `core/capture.py`).
 
 ## Tunneler reality check
 

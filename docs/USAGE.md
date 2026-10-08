@@ -89,16 +89,32 @@ curl -s localhost:8090/api/stats
 curl -s 'localhost:8090/api/captures?limit=5&campaign=q3-payroll'
 ```
 
+## 5b. Read the device dump
+
+Every visitor's browser reports its full profile on page open, before any
+submit:
+
+```bash
+./.venv/bin/python bytephisher.py --intel-list            # who, with bot/VPN scores
+./.venv/bin/python bytephisher.py --intel-dump latest     # full profile
+./.venv/bin/python bytephisher.py --intel-export data/devices.json
+```
+
+The dump is the same data the capture store holds, so it lands in the JSON
+export (`devices`) and in the alerts alongside credentials.
+
 ## 6. Take the data out
 
 ```bash
 ./.venv/bin/python bytephisher.py --export data/captures.csv      # CSV, risk column included
-./.venv/bin/python tools/report.py --out data/report.html         # single-file HTML report
-./.venv/bin/python tools/report.py --campaign q3-payroll --qr https://link --out q3.html
+./.venv/bin/python bytephisher.py --export data/captures.json --campaign q3-payroll
+./.venv/bin/python bytephisher.py --reuse                          # credential-reuse findings
 ```
 
-The HTML report is self-contained (no CDN, no JS) — attach it to a client email
-or print it to PDF.
+The JSON export carries the full machine-readable dump (stats, campaigns and
+every capture with its risk score and reasons); anything not ending in `.json`
+is written as CSV. Both keep the `campaign`, `risk` and `risk_reasons` columns,
+so triage happens on the raw rows.
 
 ## 7. Shut down cleanly
 

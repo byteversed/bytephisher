@@ -11,6 +11,12 @@ bin/
 __pycache__/
 *.pyc
 .pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
 
 # generated templates (regenerate with tools/gen_templates.py)
 templates/

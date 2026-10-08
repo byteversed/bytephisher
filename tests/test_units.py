@@ -7,6 +7,7 @@ import os
 import sqlite3
 import sys
 import tempfile
+import threading
 
 import pytest
 
@@ -580,7 +581,7 @@ class TestCampaigns:
         assert row["campaign"] == "q3"
 
     def test_legacy_db_without_campaign_column_is_migrated(self):
-        """A DB created by v1.0-before-campaigns must be upgraded in place."""
+        """A DB created by an older release (before campaign columns) must be upgraded in place."""
         path = os.path.join(tempfile.mkdtemp(), "legacy.db")
         raw = sqlite3.connect(path)
         raw.execute("""CREATE TABLE captures (id INTEGER PRIMARY KEY AUTOINCREMENT, ts REAL,
@@ -688,3 +689,122 @@ class TestCustomImport:
             d.close()
         finally:
             httpd.shutdown()
+
+
+# ==================================================== tunneler diagnostics ====
+class TestTunnelerDiagnostics:
+    """A tunneler that fails must say WHY — 'FAILED' alone is useless on a
+    live engagement. Verified live: Cloudflare returned HTTP 429 / error 1015
+    for quick tunnels, and the CLI now prints that instead of a bare FAILED."""
+
+    def _tunneler(self, name):
+        cls = REGISTRY[name]
+        return cls(0)
+
+    def test_rate_limit_is_explained(self):
+        t = self._tunneler("cloudflared")
+        os.makedirs(os.path.dirname(t.log), exist_ok=True)
+        with open(t.log, "w") as f:
+            f.write("ERR Error unmarshaling QuickTunnel response: error code: 1015\n"
+                    ' error="invalid character' + "'" + 'e' + "'" + ' looking for beginning of value"'
+                    ' status_code="429 Too Many Requests"\n')
+        why = t._explain_failure()
+        assert "429" in why and "rate-limited" in why and t.reason == why
+
+    def test_missing_authtoken_is_explained(self):
+        t = self._tunneler("ngrok")
+        os.makedirs(os.path.dirname(t.log), exist_ok=True)
+        with open(t.log, "w") as f:
+            f.write("ERROR: authentication failed: Your account is limited to 1 session\n"
+                    "ERR_NGROK_4018\n")
+        assert "authtoken" in t._explain_failure()
+
+    def test_unreachable_service_is_explained(self):
+        t = self._tunneler("bore")
+        with open(t.log, "w") as f:
+            f.write("error: Connection refused (os error 111)\n")
+        assert "network" in t._explain_failure()
+
+    def test_successful_log_produces_no_reason(self):
+        t = self._tunneler("cloudflared")
+        with open(t.log, "w") as f:
+            f.write("INF +https://fine-tunnel.trycloudflare.com\n"
+                    "INF Registered tunnel connection connIndex=0\n")
+        assert t._explain_failure() == "" and t.reason == ""
+
+    def test_reason_for_unknown_tunneler_is_empty(self):
+        from tunnels import reason_for
+        assert reason_for("does-not-exist") == ""
+
+
+# ============================================== concurrency / thread safety ===
+class TestConcurrencySafety:
+    """Regression: one shared sqlite3 connection used by the HTTP server, the
+    dashboard SSE generator and the TUI at the same time SEGFAULTED the process
+    ('Fatal Python error: Segmentation fault ... core/capture.py in since()').
+    The store now keeps one connection per thread and refuses work after close."""
+
+    def test_parallel_readers_and_writers(self):
+        path = os.path.join(tempfile.mkdtemp(), "conc.db")
+        db = cap.CaptureDB(path)
+        errors = []
+        stop = threading.Event()
+
+        def writer(i):
+            try:
+                for n in range(25):
+                    db.record("/", f"10.0.0.{i}", "C", "IN", "ISP", f"UA{i}", "android",
+                              {"email": f"u{i}-{n}@x.test", "password": "p"}, True,
+                              campaign="conc", risk=0)
+            except Exception as e:                       # pragma: no cover
+                errors.append(f"writer {i}: {e}")
+
+        def reader():
+            try:
+                while not stop.is_set():
+                    db.all(limit=50)
+                    db.stats()
+                    db.since(0, limit=50)
+                    db.campaigns()
+                    db.max_id()
+            except Exception as e:                       # pragma: no cover
+                errors.append(f"reader: {e}")
+
+        ws = [threading.Thread(target=writer, args=(i,)) for i in range(4)]
+        rs = [threading.Thread(target=reader) for _ in range(6)]
+        for t in rs + ws:
+            t.start()
+        for t in ws:
+            t.join()
+        stop.set()
+        for t in rs:
+            t.join()
+        assert not errors, errors
+        assert db.stats()["total_captures"] == 100
+        db.close()
+
+    def test_use_after_close_is_a_clean_error_not_a_crash(self):
+        db = cap.CaptureDB(os.path.join(tempfile.mkdtemp(), "closed.db"))
+        db.record("/", "1.2.3.4", "C", "IN", "ISP", "UA", "android",
+                  {"email": "a@b.c", "password": "p"}, True)
+        db.close()
+        with pytest.raises(RuntimeError):
+            db.all()
+        with pytest.raises(RuntimeError):
+            db.record("/", "1.2.3.4", "C", "IN", "ISP", "UA", "android", {}, False)
+        # the SSE feed tolerates a closed store instead of exploding
+        assert db.since(0) == []
+
+    def test_each_thread_gets_its_own_connection(self):
+        db = cap.CaptureDB(os.path.join(tempfile.mkdtemp(), "perthread.db"))
+        main_conn = db.conn
+        seen = []
+
+        def other():
+            seen.append(db.conn)
+
+        t = threading.Thread(target=other)
+        t.start()
+        t.join()
+        assert seen and seen[0] is not main_conn      # never shared across threads
+        db.close()
