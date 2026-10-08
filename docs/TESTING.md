@@ -19,6 +19,7 @@ make test-fast                               # skip the live tier
 | `test_http.py` | `pytest tests/test_http.py` | live HTTP: GET/POST variants, honeypot + timing fields, forwarded-IP precedence, device detection over the wire, redirect mode, OTP flow, TLS, webhook firing, 40 parallel submissions |
 | `test_features.py` | `pytest tests/test_features.py` | risk engine + risk over HTTP, QR output, HTML report (incl. escaping), PDF report (labels, campaign filter, QR, empty DB, CLI flag), template rotation, alert payloads, new CLI flags, JSON/CSV export, stress-tool integrity, doctor, campaign launcher, tunnel watchdog |
 | `test_gate.py` | `pytest tests/test_gate.py` | gating parsers and logic (country allow/deny, datacenter, active hours/days, per-IP hit cap), gating over real HTTP, decoy redirect, refused visitors not counted |
+| `test_gaps.py` | `pytest tests/test_gaps.py` | packaging/pip console script + library import + `BYTEPHISHER_HOME`, SSE `/stream` push of a live capture + polling fallback, update check (stub, cache, CLI), credential-reuse detection in DB/CLI/HTML/PDF |
 | `test_live.py` | `pytest tests/test_live.py` | real internet: geo lookups, cloudflared / localhost.run / bore public round-trips with captures landing in SQLite, Flask dashboard API, SMTP delivery into a local aiosmtpd sink, public webhook echo, CLI subprocess runs (incl. SIGINT session summary), TUI live loop |
 
 Live tests **skip with a reason** when a service is unavailable; they never fake

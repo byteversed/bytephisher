@@ -1,0 +1,15 @@
+rich>=13.0
+jinja2>=3.1
+requests>=2.31
+pyyaml>=6.0
+flask>=3.0
+segno>=1.6
+
+[pdf]
+reportlab>=4.0
+pypdf>=4.0
+
+[test]
+pytest>=8.0
+pytest-timeout>=2.3
+aiosmtpd>=1.4

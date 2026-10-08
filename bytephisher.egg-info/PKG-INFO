@@ -1,3 +1,30 @@
+Metadata-Version: 2.4
+Name: bytephisher
+Version: 1.0.4
+Summary: Advanced phishing-simulation framework for authorized security-awareness and red-team engagements
+Author: BytePhisher contributors
+License: MIT
+Project-URL: Documentation, https://example.invalid/bytephisher/docs
+Keywords: security,phishing-simulation,awareness,red-team,pentest
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Security
+Classifier: Intended Audience :: Information Technology
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: rich>=13.0
+Requires-Dist: jinja2>=3.1
+Requires-Dist: requests>=2.31
+Requires-Dist: pyyaml>=6.0
+Requires-Dist: flask>=3.0
+Requires-Dist: segno>=1.6
+Provides-Extra: pdf
+Requires-Dist: reportlab>=4.0; extra == "pdf"
+Requires-Dist: pypdf>=4.0; extra == "pdf"
+Provides-Extra: test
+Requires-Dist: pytest>=8.0; extra == "test"
+Requires-Dist: pytest-timeout>=2.3; extra == "test"
+Requires-Dist: aiosmtpd>=1.4; extra == "test"
+
 # BytePhisher v1.0
 
 **Advanced phishing-simulation framework** for authorized security-awareness
@@ -43,25 +70,14 @@ campaign reports, SMTP spear-phishing module and CSV export.
 ## Install
 
 ```bash
-# 1) as a Python package (console script `bytephisher` on your PATH)
-pip install .            # or: pip install -e .  for a live source checkout
-bytephisher --version
-
-# 2) from a source checkout (what the tests use)
-git clone <repo> bytephisher && cd bytephisher
+git clone <your-repo> bytephisher && cd bytephisher
 python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
-./.venv/bin/python tools/gen_templates.py     # writes templates/ (243 sites)
+./.venv/bin/python tools/gen_templates.py     # writes templates/ (80 sites)
 ```
 
-Optional extras: `pip install ".[pdf]"` (PDF reports), `pip install ".[test]"`.
-
-`BYTEPHISHER_HOME` decides where `config/`, `templates/` and `data/` live
-(defaults to the checkout; an installed copy falls back to the current
-directory, so it never tries to write into site-packages).
-
-Requirements: Python 3.10+ (`rich`, `jinja2`, `requests`, `pyyaml`, `flask`,
-`segno`). No PHP, no web server, no external binaries except the tunnel client
-you pick (cloudflared is auto-downloaded into `bin/` when missing).
+Requirements: Python 3.10+ (`rich`, `jinja2`, `requests`, `pyyaml`, `flask`).
+No PHP, no web server, no external binaries except the tunnel client you pick
+(cloudflared is auto-downloaded into `bin/` when missing).
 
 ## Quick start
 
@@ -117,8 +133,6 @@ you pick (cloudflared is auto-downloaded into `bin/` when missing).
 | `--qr [PATH]` | save a QR code PNG of the live link (default `data/qr.png`) |
 | `--report PATH` | write a self-contained HTML campaign report and exit |
 | `--pdf PATH` | write a dark-theme PDF campaign report (CONFIRMED/SUSPECTED labels) and exit |
-| `--reuse` | print credential-reuse findings (repeated identities / passwords) and exit |
-| `--check-update` / `--update-repo OWNER/REPO` | check for a newer release |
 | `--export PATH` | dump captures (`.json` → JSON, anything else → CSV) and exit |
 | `--no-tui` | plain refresh output instead of the full-screen dashboard |
 
@@ -276,7 +290,6 @@ the row count actually written, so a "successful" run cannot hide lost captures.
 ## Documentation
 
 * `README.md` — this file: capabilities, flags, verification evidence
-* `docs/FEATURE_MATRIX.md` — **planned vs built**, with the honest gaps
 * `docs/USAGE.md` — operator walkthrough, campaign by campaign
 * `docs/TESTING.md` — test tiers, what is really verified, how to debug failures
 * `CHANGELOG.md` — what changed and which bug each fix came from

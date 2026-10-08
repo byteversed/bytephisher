@@ -34,3 +34,7 @@ redirect_after_capture: ""
 telegram: ""                  # "BOT_TOKEN:CHAT_ID"
 webhook: ""                   # any URL receiving the capture as JSON
 telegram_api_base: ""         # empty = real api.telegram.org (tests point this at a stub)
+
+# update check (optional): set a repo to get a startup notice for newer releases
+update_repo: ""               # e.g. "owner/bytephisher"
+update_api: ""                # explicit release API URL (overrides update_repo)

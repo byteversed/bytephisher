@@ -29,7 +29,7 @@ from urllib.parse import urljoin
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
-TEMPLATES = os.path.join(HERE, "templates")
+TEMPLATES = os.path.join(os.environ.get("BYTEPHISHER_HOME") or HERE, "templates")
 
 
 class FormScanner(HTMLParser):

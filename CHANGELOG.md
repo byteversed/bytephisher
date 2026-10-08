@@ -72,6 +72,14 @@ why, with the verification evidence where a change came from a live bug.
 * rich live TUI (campaign, geo, risk, credential flag, fields) + plain refresher
   mode for logs/systemd, plus Flask dashboard with `/api/captures`,
   `/api/stats`, `/api/campaigns` and campaign filtering.
+* Real-time web dashboard: **Server-Sent Events** (`/stream`) push new captures
+  the moment they land, with automatic fallback to polling if the stream drops.
+* Credential-reuse analysis (`db.reuse_stats()`, `--reuse`): repeated identities
+  and passwords reused across identities/campaigns, surfaced in the CLI, the HTML
+  report and the PDF report.
+* Update check (`core/update.py`, `--check-update`): compares against a GitHub
+  release (or an explicit API URL), 24h cache, background startup notice — and it
+  says "not-configured" rather than pretending when no source is set.
 * Telegram and generic-webhook alerts per capture (daemon thread, failures
   swallowed so a dead webhook can never break a capture).
 * Self-contained HTML campaign report (KPIs, campaigns, geo/device/ISP bars,

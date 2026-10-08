@@ -153,6 +153,84 @@ class CaptureDB:
         total = self.conn.execute("SELECT COUNT(*) FROM blocked").fetchone()[0]
         return {"total_blocked": total, "by_reason": [{"reason": r[0], "count": r[1]} for r in rows]}
 
+    def max_id(self):
+        row = self.conn.execute("SELECT COALESCE(MAX(id), 0) FROM captures").fetchone()
+        return int(row[0] or 0)
+
+    def since(self, after_id, limit=100):
+        """Captures newer than `after_id` (ascending) — the SSE feed uses this so
+        the dashboard pushes rows instead of polling the whole table."""
+        rows = self.conn.execute(
+            "SELECT id, ts, source_url, ip, city, country, isp, ua, device, fields_json,"
+            " is_cred, campaign, risk, risk_reasons FROM captures WHERE id > ?"
+            " ORDER BY id ASC LIMIT ?", (int(after_id or 0), limit)).fetchall()
+        out = []
+        for r in rows:
+            try:
+                reasons = json.loads(r[13]) if r[13] else []
+            except Exception:
+                reasons = []
+            out.append({
+                "id": r[0], "ts": r[1], "source_url": r[2], "ip": r[3], "city": r[4],
+                "country": r[5], "isp": r[6], "ua": r[7], "device": r[8],
+                "fields": json.loads(r[9]) if r[9] else {}, "is_cred": bool(r[10]),
+                "campaign": r[11] or "", "risk": int(r[12] or 0), "risk_reasons": reasons,
+            })
+        return out
+
+    def reuse_stats(self, min_count=2):
+        """Credentials seen more than once across submissions/campaigns.
+
+        A repeated identity means the same person was targeted again; a repeated
+        password across different identities is a password-reuse finding. Both are
+        stronger evidence than a single capture, so reports state them explicitly.
+        """
+        id_keys = ("email", "username", "login", "user", "user_name", "email_address",
+                   "user_id", "username_or_email", "email_or_username", "userid",
+                   "login_id", "phone", "mobile")
+        pw_keys = ("password", "passw", "pwd", "passwd", "pass", "passphrase", "pass_code")
+
+        def pick(fields, keys):
+            for k, v in (fields or {}).items():
+                if k.lower() in keys and str(v).strip():
+                    return str(v).strip()
+            return None
+
+        identities, passwords = {}, {}
+        for r in self.all(limit=1000000):
+            if not r.get("is_cred"):
+                continue
+            f = r.get("fields") or {}
+            ident = pick(f, id_keys)
+            pw = pick(f, pw_keys)
+            if ident:
+                e = identities.setdefault(ident, {"count": 0, "campaigns": set(),
+                                                  "first": r["ts"], "last": r["ts"]})
+                e["count"] += 1
+                e["campaigns"].add(r["campaign"] or "")
+                e["last"] = max(e["last"], r["ts"])
+            if pw:
+                e = passwords.setdefault(pw, {"count": 0, "identities": set(), "campaigns": set()})
+                e["count"] += 1
+                if ident:
+                    e["identities"].add(ident)
+                e["campaigns"].add(r["campaign"] or "")
+
+        rep_id = [{"identity": k, "count": v["count"],
+                   "campaigns": sorted(c for c in v["campaigns"] if c),
+                   "first_seen": v["first"], "last_seen": v["last"]}
+                  for k, v in identities.items() if v["count"] >= min_count]
+        rep_pw = [{"password": k, "count": v["count"],
+                   "identities": sorted(v["identities"]),
+                   "campaigns": sorted(c for c in v["campaigns"] if c)}
+                  for k, v in passwords.items()
+                  if v["count"] >= min_count or len(v["identities"]) >= min_count]
+        rep_id.sort(key=lambda x: -x["count"])
+        rep_pw.sort(key=lambda x: -x["count"])
+        return {"repeated_identities": rep_id, "repeated_passwords": rep_pw,
+                "total_reused_identities": len(rep_id),
+                "total_reused_passwords": len(rep_pw)}
+
     def campaigns(self):
         """Per-campaign breakdown for the dashboard / reporting."""
         rows = self.conn.execute(

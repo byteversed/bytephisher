@@ -1,0 +1,49 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bytephisher"
+version = "1.0.4"
+description = "Advanced phishing-simulation framework for authorized security-awareness and red-team engagements"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "BytePhisher contributors" }]
+keywords = ["security", "phishing-simulation", "awareness", "red-team", "pentest"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Security",
+    "Intended Audience :: Information Technology",
+]
+dependencies = [
+    "rich>=13.0",
+    "jinja2>=3.1",
+    "requests>=2.31",
+    "pyyaml>=6.0",
+    "flask>=3.0",
+    "segno>=1.6",
+]
+
+[project.optional-dependencies]
+pdf = ["reportlab>=4.0", "pypdf>=4.0"]
+test = ["pytest>=8.0", "pytest-timeout>=2.3", "aiosmtpd>=1.4"]
+
+[project.scripts]
+bytephisher = "bytephisher:main"
+
+[project.urls]
+Documentation = "https://example.invalid/bytephisher/docs"
+
+[tool.setuptools]
+# the CLI is a top-level module; the engine lives in these packages
+py-modules = ["bytephisher"]
+packages = ["core", "tunnels", "dashboard", "mailer", "tools"]
+
+[tool.setuptools.package-data]
+core = ["../config/*.yaml"]
+"*" = ["*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 300
