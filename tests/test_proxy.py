@@ -25,7 +25,7 @@ import urllib.request
 import pytest
 
 from core import capture as cap
-from core.proxy import Phishlet, ProxyEngine, serve_proxy, HOOK_PATH, CAPTURE_PATH
+from core.proxy import CAPTURE_PATH, HOOK_PATH, Phishlet, ProxyEngine, serve_proxy
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 

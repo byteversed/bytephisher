@@ -59,8 +59,11 @@ Anything partial or unverified says so explicitly.
 * `tools/stress.py` load test with row-count integrity check.
 * `tools/probe_tunnels.py` live tunneler reality check.
 * `tools/doctor.py` environment self-check (also `--doctor`).
-* 9 test suites (`e2e`, `units`, `http`, `features`, `gate`, `gaps`, `proxy`,
-  `intel`, `live`) with a single runner that never hides a skip.
+* 10 test suites (`e2e`, `units`, `http`, `features`, `gate`, `gaps`, `proxy`,
+  `intel`, `security`, `live`) with a single runner that never hides a skip.
+* Adversarial audit fixes: no open forward proxy (SSRF), escaped dashboard
+  rendering, validated 128-bit session ids, bounded sessions/recording/bodies,
+  CSV formula neutralisation, shared credential/device/ASN classification.
 * Reverse-proxy engine with per-victim upstream sessions and a device
   fingerprint (canvas, WebGL renderer, WebRTC IP, headless hints).
 * One SQLite connection per thread in the capture store — a single shared

@@ -10,15 +10,14 @@ import tempfile
 import threading
 
 import pytest
-
 from conftest import TEMPLATES, free_port
 
-from core import server as srv
-from core import capture as cap
-from core import templates as tpl
-from core import alerts
-from tunnels import REGISTRY, Tunneler, stop_all, running
 import mailer
+from core import alerts
+from core import capture as cap
+from core import server as srv
+from core import templates as tpl
+from tunnels import REGISTRY, Tunneler, running, stop_all
 
 
 # ---------------------------------------------------------------- helpers ----
@@ -373,9 +372,10 @@ class TestNetHelpers:
 
     def test_ipv4_only_patches_and_restores_getaddrinfo(self):
         import socket as _socket
+
         from core import net
         original = _socket.getaddrinfo
-        with net.ipv4_only() as ctx:
+        with net.ipv4_only():
             assert _socket.getaddrinfo is not original
             infos = _socket.getaddrinfo("localhost", 80, proto=_socket.IPPROTO_TCP)
             assert all(f[0] == _socket.AF_INET for f in infos)
@@ -383,6 +383,7 @@ class TestNetHelpers:
 
     def test_ipv4_only_is_reentrant_and_threadsafe(self):
         import socket as _socket
+
         from core import net
         original = _socket.getaddrinfo
         with net.ipv4_only():
@@ -392,6 +393,7 @@ class TestNetHelpers:
 
     def test_ipv4_only_restores_on_exception(self):
         import socket as _socket
+
         from core import net
         original = _socket.getaddrinfo
         try:
@@ -403,6 +405,7 @@ class TestNetHelpers:
 
     def test_fetch_json_and_post_json_against_local_stub(self):
         from conftest import StubHTTP
+
         from core import net
         stub = StubHTTP(body=b'{"ok": true, "n": 7}')
         try:
@@ -417,13 +420,37 @@ class TestNetHelpers:
         finally:
             stub.stop()
 
-    def test_ipv6_available_returns_bool(self):
+    def test_ipv6_probe_actually_tests_connectivity(self, monkeypatch):
+        """Not just a type check: the probe must reflect what it can connect to.
+
+        It opens an AF_INET6 socket and connects, so that is what we fake: a
+        successful connect means True, an unreachable network means False.
+        """
+        import socket as _s
+
         from core import net
-        assert isinstance(net.ipv6_available(timeout=2), bool)
+
+        class _FakeSock:
+            def __init__(self, *a, **k): pass
+            def settimeout(self, t): self.timeout = t
+            def connect(self, addr): self.addr = addr
+            def close(self): pass
+
+        monkeypatch.setattr(_s, "socket", _FakeSock)
+        assert net.ipv6_available(timeout=1) is True
+        assert net.ipv6_available.__doc__ is not None
+
+        class _BadSock(_FakeSock):
+            def connect(self, addr):
+                raise OSError("Network is unreachable")
+
+        monkeypatch.setattr(_s, "socket", _BadSock)
+        assert net.ipv6_available(timeout=1) is False
 
     def test_geo_lookup_uses_net_layer(self):
         """The geo path must not bypass core/net (that was the Errno 101 bug)."""
         import inspect
+
         from core import server as _srv
         src = inspect.getsource(_srv.make_handler)
         assert "net.fetch_json" in src
@@ -437,6 +464,9 @@ class TestTunnels:
                                  "serveo", "bore", "hoplink"}
 
     def test_stop_all_with_no_processes(self):
+        # make the test independent of what ran before it in the same process
+        from tunnels import stop_all as _sa
+        _sa()
         assert stop_all() == 0
         assert running() == []
 
@@ -471,17 +501,24 @@ class TestTunnels:
             assert isinstance(t.name, str) and isinstance(t.url_pattern, str)
             assert t.bin_path is None
 
-    def test_start_returns_none_when_binary_missing(self):
-        # ngrok is not installed in CI -> adapter must fail soft, not raise
+    def test_start_returns_none_when_binary_missing(self, monkeypatch):
+        """A missing binary must fail soft, never raise — asserted unconditionally
+        (the old version asserted nothing on a box where ngrok was installed)."""
         t = REGISTRY["ngrok"](free_port())
-        if not t._resolve(["ngrok"]):
-            assert t.start() is None
+        monkeypatch.setattr(t, "_resolve", lambda names: False)   # pretend absent
+        monkeypatch.setattr(t, "ensure_binary", lambda: False)
+        assert t.start() is None
+        assert t.reason                                   # and it explains why
+        from tunnels import reason_for, run_one
+        assert run_one("ngrok", free_port()) is None
+        assert reason_for("ngrok")                        # CLI shows the reason
 
     def test_running_and_dead_names_track_children(self):
         """The CLI watchdog needs to know which tunneler died."""
         import tempfile
         import time as _t
-        from tunnels import _bg, running_names, dead_names, stop_all
+
+        from tunnels import _bg, dead_names, running_names, stop_all
         d = tempfile.mkdtemp()
         alive_log = os.path.join(d, "alive.log")
         dies_log = os.path.join(d, "dies.log")
@@ -649,7 +686,10 @@ class TestCustomImport:
 
         # the imported page must satisfy the same contract as a generated one
         html = tpl.render_site(res["dir"], "/", False)
-        assert 'action="/"' in html and 'name="password"' not in html or "passwd" in html
+        # the imported page keeps its own field names (no injected "password")
+        assert 'name="passwd"' in html
+        assert 'name="password"' not in html
+        assert 'action="/"' in html
         assert "ACME" in html
 
     def test_imported_template_captures_credentials(self, tmp_path, monkeypatch):
@@ -659,6 +699,7 @@ class TestCustomImport:
         import time as _t
         import urllib.parse
         import urllib.request
+
         import tools.import_site as imp
         fake_tpl = tmp_path / "templates"
         fake_tpl.mkdir()

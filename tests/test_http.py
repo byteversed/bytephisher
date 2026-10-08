@@ -2,6 +2,7 @@
 
 Run:  ./.venv/bin/python -m pytest tests/test_http.py -v
 """
+import http.client
 import json
 import os
 import ssl
@@ -11,14 +12,12 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-import http.client
 
 import pytest
+from conftest import FIXTURES, TEMPLATES, StubHTTP, free_port
 
-from conftest import TEMPLATES, FIXTURES, free_port, StubHTTP
-
-from core import server as srv
 from core import capture as cap
+from core import server as srv
 
 
 # ------------------------------------------------------------- fixtures ------
@@ -117,9 +116,11 @@ class TestGet:
         assert srv_default.db.stats()["visitors"] == before + 1
 
     def test_get_counts_a_visit(self, srv_default):
+        before = srv_default.db.stats()["visitors"]
         srv_default.get("/")
         time.sleep(0.2)
-        assert srv_default.db.stats()["visitors"] >= 1
+        # exactly one new visitor: >= 1 hid a double-count regression
+        assert srv_default.db.stats()["visitors"] == before + 1
 
     def test_repeated_get_is_one_visitor(self, srv_default):
         for _ in range(3):

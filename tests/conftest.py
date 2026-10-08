@@ -1,7 +1,7 @@
 # pytest bootstrap: make the project importable and share helpers.
 import os
-import sys
 import socket
+import sys
 import threading
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

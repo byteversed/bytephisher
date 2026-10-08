@@ -15,8 +15,7 @@ import urllib.parse
 import urllib.request
 
 import pytest
-
-from conftest import TEMPLATES, free_port, StubHTTP
+from conftest import TEMPLATES, StubHTTP, free_port
 
 from core import capture as cap
 from core import update as upd

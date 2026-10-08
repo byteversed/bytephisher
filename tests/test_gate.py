@@ -2,9 +2,7 @@
 
 Run:  ./.venv/bin/python -m pytest tests/test_gate.py -v
 """
-import json
 import os
-import socket
 import tempfile
 import threading
 import time
@@ -13,11 +11,10 @@ import urllib.parse
 import urllib.request
 
 import pytest
-
 from conftest import TEMPLATES, free_port
 
-from core import server as srv
 from core import capture as cap
+from core import server as srv
 from core.gate import Gate, parse_days, parse_hours
 
 
@@ -32,12 +29,15 @@ class TestParsers:
         assert parse_days("") is None
 
     def test_parse_hours(self):
-        assert parse_hours("9-18") == (9, 18)
-        assert parse_hours("0-24") == (0, 24)
-        assert parse_hours("18-9") is None      # inverted
-        assert parse_hours("24-25") is None     # out of range
-        assert parse_hours("junk") is None
+        assert parse_hours("9-18") == (9 * 60, 18 * 60)          # minutes since midnight
+        assert parse_hours("9:30-17:45") == (9 * 60 + 30, 17 * 60 + 45)
+        assert parse_hours("0-24") == (0, 1440)                  # 24:00 = end of day
         assert parse_hours(None) is None
+        # degenerate/unparseable values RAISE: silently returning None used to
+        # disable the time gate while the operator believed it was active
+        for bad in ("18-9", "9-9", "24-25", "junk", "9:", "-5"):
+            with pytest.raises(ValueError):
+                parse_hours(bad)
 
 
 # ============================================================== gate =========
@@ -49,7 +49,10 @@ class TestGateLogic:
 
     def test_country_allow_list(self):
         g = Gate(allow_countries=["in", "US"])
-        assert g.check(ip="1.1.1.1", country="India")[0] is True or True  # name vs code
+        # the list is normalised to upper-case codes: a full country NAME is not
+        # a code and must be refused, exactly like an unlisted country
+        ok_name, reason_name = g.check(ip="1.1.1.1", country="India")
+        assert ok_name is False and "not in allow list" in reason_name
         ok, reason = g.check(ip="1.1.1.1", country="IN")
         assert ok is True and reason == ""
         ok, reason = g.check(ip="1.1.1.1", country="DE")
@@ -105,11 +108,42 @@ class TestGateLogic:
         # window expiry frees the cap again
         assert g.check(ip="9.9.9.9", now=time.time() + 120)[0] is True
 
+    def test_active_hours_boundary_minutes(self):
+        """08:59 blocked, 09:00 served, 17:59 served, 18:00 blocked."""
+        g = Gate(active_hours="9-18")
+
+        def at(h, m):
+            return time.mktime(time.strptime(f"2026-10-08 {h:02d}:{m:02d}:00",
+                                             "%Y-%m-%d %H:%M:%S"))
+
+        assert g.check(country="IN", now=at(8, 59))[0] is False
+        assert g.check(country="IN", now=at(9, 0))[0] is True
+        assert g.check(country="IN", now=at(17, 59))[0] is True
+        assert g.check(country="IN", now=at(18, 0))[0] is False
+
+    def test_minute_precision_window(self):
+        g = Gate(active_hours="9:30-17:45")
+
+        def at(h, m):
+            return time.mktime(time.strptime(f"2026-10-08 {h:02d}:{m:02d}:00",
+                                             "%Y-%m-%d %H:%M:%S"))
+
+        assert g.check(country="IN", now=at(9, 29))[0] is False
+        assert g.check(country="IN", now=at(9, 30))[0] is True
+        assert g.check(country="IN", now=at(17, 44))[0] is True
+        assert g.check(country="IN", now=at(17, 45))[0] is False
+
+    def test_degenerate_hours_refuse_to_silently_disable(self):
+        with pytest.raises(ValueError):
+            Gate(active_hours="9-9")
+        with pytest.raises(ValueError):
+            Gate(active_hours="18-9")
+
     def test_describe_is_human_readable(self):
         g = Gate(allow_countries=["IN"], block_datacenter=True,
                  active_hours="9-18", max_hits_per_ip=5)
         d = g.describe()
-        for bit in ("allow IN", "no-datacenter", "hours 9-18", "cap 5"):
+        for bit in ("allow IN", "no-datacenter", "hours 09:00-18:00", "cap 5"):
             assert bit in d, d
 
 

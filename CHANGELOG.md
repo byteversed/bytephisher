@@ -174,6 +174,44 @@ line. There is no parallel 1.x branch.
 * Session summary on Ctrl+C (runtime, captures, credentials, visitors, links,
   tunneler shutdown count).
 
+### Security hardening (adversarial audit)
+
+A hostile audit of the proxy, server, dashboard, store and CLI produced 14
+findings; every one is fixed and pinned by `tests/test_security.py` (31 tests).
+Full record in `docs/SECURITY.md`.
+
+* **SSRF / open forward proxy** (HIGH): an absolute-form request line
+  (`GET http://169.254.169.254/…`) made the proxy fetch any attacker-chosen URL
+  from the server's network position *and* attach the victim's upstream cookie
+  jar to it. The handler now reduces every target to path+query and `fetch()`
+  refuses foreign absolute URLs.
+* **Stored XSS in the dashboard** (HIGH): captured values were injected with
+  `insertAdjacentHTML` unescaped, so a submitted field value executed in the
+  operator's browser. Every interpolation now goes through `esc()`.
+* **Terminal / rich-markup injection** (LOW): ANSI control characters and
+  `[markup]` in captured values are stripped/escaped before rendering.
+* **Session handling**: client-supplied session ids must be 128-bit
+  (`^[0-9a-f]{16,64}$`, was 6 hex chars = session fixation); `__bhs` is now
+  `HttpOnly` always and `Secure` when the victim's hop is HTTPS; upstream
+  `Secure` is preserved over HTTPS instead of always stripped.
+* **Resource limits**: session map capped with LRU eviction, per-session
+  recording capped at 5000 events, request bodies capped at 2 MB → 413.
+* **CSV formula injection**: values beginning `= + - @` are neutralised on export.
+* **Gating bypass**: POST now counts against `--max-hits`, and
+  `--no-trust-headers` ignores spoofable `X-Forwarded-For` when the server is
+  exposed directly.
+* **`--tls` without `--cert`** now raises instead of silently serving plaintext.
+* **Data quality**: credential detection no longer matches `pin` inside
+  `shipping`; blank urlencoded values are kept; campaign-scoped stats no longer
+  return the global visitor count; `--active-hours` rejects degenerate windows
+  instead of silently disabling the gate (and supports `H:MM`).
+* **Shared classification**: `core/classify.py` now owns credential detection,
+  device classification and the datacenter marker list, so the static server and
+  the proxy can never disagree.
+* **Tooling**: `import_site` refuses non-http(s) URLs; ruff found an f-string
+  that only parses on Python 3.12+ in a 3.10+ project; 19 unused imports and 6
+  dead assignments removed; CI workflow added.
+
 ### Deliberately not included
 * No HTML/PDF report generator. The capture store, the CSV/JSON export and the
   dashboard are the deliverables; a pretty document nobody asked for is scope

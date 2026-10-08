@@ -10,10 +10,9 @@
 # try/except and notifications run on a daemon thread, so a dead webhook can
 # never slow down or break a submission.
 
-import json
 import threading
 import time
-import urllib.request
+
 
 def format_capture(c):
     """Human-readable one-message summary of a capture dict."""

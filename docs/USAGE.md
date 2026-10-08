@@ -7,14 +7,14 @@ Everything below was executed against this build; commands are copy-paste ready.
 
 ```bash
 git clone <repo> bytephisher && cd bytephisher
-make install            # venv + deps + 179 templates
+make install            # venv + deps + 243 templates
 ./.venv/bin/python bytephisher.py --list | head
 ```
 
 ## 1. Pick a template
 
 ```bash
-./.venv/bin/python bytephisher.py --list           # numbered 1..179
+./.venv/bin/python bytephisher.py --list           # numbered 1..243
 ./.venv/bin/python bytephisher.py -o 3             # by index
 ./.venv/bin/python bytephisher.py -o google        # by slug
 ```

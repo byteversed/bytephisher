@@ -358,8 +358,8 @@ the row count actually written, so a "successful" run cannot hide lost captures.
 | Target | How |
 |---|---|
 | Docker | `docker compose up -d` (see `docker-compose.yml`, dashboard on :8090) |
-| systemd | `cp deploy/bytephisher.service /etc/systemd/system/ && systemctl enable --now bytephisher` |
-| Android/Termux | `bash deploy/install-termux.sh` (auto-downloads cloudflared arm64 on first use) |
+| systemd | `cp deploy/bytephisher.service /etc/systemd/system/ && systemctl enable --now bytephisher` — the unit hard-codes `/opt/bytephisher`; edit `WorkingDirectory`/`ExecStart` if your checkout lives elsewhere |
+| Android/Termux | `bash deploy/install-termux.sh` (set `BYTEPHISHER_REPO=<your repo url>` if you forked it; auto-downloads cloudflared arm64 on first use) |
 | Anywhere | `make install && make run` |
 
 ## Documentation
@@ -367,6 +367,7 @@ the row count actually written, so a "successful" run cannot hide lost captures.
 * `README.md` — this file: capabilities, flags, verification evidence
 * `docs/ARCHITECTURE.md` — module map, data flow, design rules
 * `docs/PROXY.md` — reverse-proxy engine: phishlet reference, limits, ops notes
+* `docs/SECURITY.md` — threat model, the audit findings and how each is fixed
 * `docs/INTEL.md` — deep device dump: every module, what it proves, limits
 * `docs/DETECTION.md` — purple-team pack: Sigma / Suricata / YARA / EDR rules
 * `docs/FEATURE_MATRIX.md` — **planned vs built**, with the honest gaps
@@ -374,6 +375,17 @@ the row count actually written, so a "successful" run cannot hide lost captures.
 * `docs/TESTING.md` — test tiers, what is really verified, how to debug failures
 * `tests/README.md` — the eight suites and the rules they follow
 * `CHANGELOG.md` — what changed and which bug each fix came from
+
+### Security posture
+
+The tool was audited adversarially (SSRF, XSS, session handling, resource
+limits, injection) and every finding is fixed and pinned by a test in
+`tests/test_security.py`. Highlights: the reverse proxy refuses to fetch
+anything but its own upstream (no open forward proxy, no cookie leak), the
+dashboard escapes every captured value before rendering, session ids are 128-bit
+and validated, the session map / recording / request body are all capped, and
+the CSV export neutralises spreadsheet formulas. Full detail, including what the
+audit could NOT break, is in `docs/SECURITY.md`.
 
 ### Before every campaign
 
@@ -472,6 +484,7 @@ docker run --rm -p 8080:8080 -p 8090:8090 -v "$PWD/data:/app/data" bytephisher \
 | `tests/test_features.py` | risk engine + risk over HTTP, QR output, template rotation, alert payloads, CLI flags, JSON/CSV export, stress tool integrity, doctor, campaign launcher |
 | `tests/test_gate.py` | gating parsers, gate logic (country/datacenter/hours/days/hit-cap), gating over real HTTP incl. decoy redirect and "refused visitors are not counted" |
 | `tests/test_gaps.py` | packaging/pip install, SSE dashboard stream, update check, credential reuse, migrations, tunnel watchdog |
+| `tests/test_security.py` | adversarial regression pack: SSRF via absolute-form URI, dashboard stored-XSS escaping, session-id/cookie hardening, body + session + recording caps, CSV formula injection, credential false-positives, blank-field handling, POST hit-cap, `--no-trust-headers`, TLS-without-cert guard, campaign-scoped stats |
 | `tests/test_intel.py` | deep device dump: identity/device-class guessing, headless + VPN scoring with evidence, device-token stability, wave merging (and stale-error cleanup), page tag injection, collector serving, malformed/empty/oversized payloads, one-record-per-session, export, and the `--intel-dump/list/export` CLI |
 | `tests/test_proxy.py` | reverse-proxy engine against a fake multi-step login site: rewriting, hook injection, cookie isolation, capture storage, risk, malformed/empty bodies, upstream 500/down, inject/block rules, unicode + 50 KB fields, 12-way concurrency, HEAD, query strings, phishlet YAML — plus three CLI-level `--proxy` runs with an isolated `BYTEPHISHER_HOME` |
 | `tests/test_live.py` | real internet: geo lookup, cloudflared/localhost.run/bore tunnels with a public POST landing in SQLite, Flask dashboard API, real SMTP delivery via a local aiosmtpd sink, public webhook echo, CLI subprocess runs with SIGINT summary, TUI live loop |

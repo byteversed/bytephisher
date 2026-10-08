@@ -6,15 +6,10 @@
 # first and report honestly (e.g. "12 credential pairs, 9 from real devices").
 #
 # Nothing here blocks a submission — it only labels it.
-import re
 
-DATACENTER_MARKERS = (
-    "ovh", "hetzner", "digitalocean", "linode", "vultr", "contabo", "choopa",
-    "amazon", "aws", "google cloud", "microsoft azure", "azure", "oracle cloud",
-    "cloudflare", "m247", "leaseweb", "scaleway", "upcloud", "hostinger",
-    "hostwinds", "alibaba cloud", "tencent", "rackspace", "serverius",
-    "datacamp", "colo", "hosting", "datacenter", "data center", "vps", "gcp",
-)
+from . import classify
+
+DATACENTER_MARKERS = classify.DATACENTER_MARKERS
 
 AUTOMATION_MARKERS = (
     "curl/", "wget/", "python-requests", "python-urllib", "httpx/", "aiohttp",

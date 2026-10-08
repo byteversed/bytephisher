@@ -1,7 +1,7 @@
 services:
   bytephisher:
     build: .
-    image: bytephisher:1.0
+    image: bytephisher:0.1.0
     container_name: bytephisher
     restart: unless-stopped
     ports:

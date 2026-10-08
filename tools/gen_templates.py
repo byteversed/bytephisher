@@ -13,6 +13,7 @@ site is one tuple — no HTML editing. Re-run to regenerate everything:
 import json
 import os
 
+
 def _out_dir():
     """Templates go where the operator points us (BYTEPHISHER_HOME), else next to
     the source checkout — never into a read-only site-packages install."""

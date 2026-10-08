@@ -5,8 +5,6 @@ Run:  ./.venv/bin/python -m pytest tests/test_features.py -v
 """
 import json
 import os
-import re
-import socket
 import subprocess
 import sys
 import tempfile
@@ -16,14 +14,11 @@ import urllib.parse
 import urllib.request
 
 import pytest
-
 from conftest import TEMPLATES, free_port
 
-from core import server as srv
 from core import capture as cap
-from core import risk
-from core import links
-import mailer
+from core import links, risk
+from core import server as srv
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PY = sys.executable
@@ -196,6 +191,7 @@ class TestTemplateRotation:
 class TestAlertPayloads:
     def test_payload_carries_campaign_and_risk(self):
         from conftest import StubHTTP
+
         from core.alerts import make_notifier
         stub = StubHTTP()
         try:

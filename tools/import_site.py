@@ -18,12 +18,10 @@ Everything is written under templates/, so the CLI picks it up immediately:
     ./bytephisher.py --list | grep mycorp
 """
 import argparse
-import html
 import json
 import os
 import re
 import sys
-import urllib.request
 from html.parser import HTMLParser
 from urllib.parse import urljoin
 
@@ -54,7 +52,14 @@ class FormScanner(HTMLParser):
         self.handle_starttag(tag, attrs)
 
 
+ALLOWED_SCHEMES = ("http://", "https://")
+
+
 def fetch(url):
+    """Fetch a page. Only http(s) is allowed: urllib happily reads file://,
+    so an unvalidated scheme turned this into a local-file reader."""
+    if not str(url).lower().startswith(ALLOWED_SCHEMES):
+        raise ValueError("only http:// and https:// URLs can be imported")
     """Fetch a page with a browser-like UA (IPv4-preferring, see core/net.py)."""
     from core import net
     return net.fetch_text(url, timeout=25, headers={
@@ -100,7 +105,6 @@ def otp_page(name, brand, slug, label="verification code"):
 def import_site(url=None, file=None, name=None, slug=None, index=None, keep_otp=True):
     if not url and not file:
         raise SystemExit("pass --url or --file")
-    base_url = url or ""
     html_text = fetch(url) if url else open(file, encoding="utf-8", errors="replace").read()
     if url:
         html_text = absolutize(html_text, url)

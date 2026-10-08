@@ -43,11 +43,12 @@ def main(argv=None):
                           ("flask", False), ("segno", False), ("requests", False),
                           ("aiosmtpd", False)]:
         try:
-            m = __import__(mod)
+            __import__(mod)
             # __version__ is deprecated on some packages (e.g. Flask 3.1);
             # importlib.metadata is the portable way to report a version
             try:
-                from importlib.metadata import version as _v, PackageNotFoundError
+                from importlib.metadata import PackageNotFoundError
+                from importlib.metadata import version as _v
                 try:
                     ver = _v({"yaml": "PyYAML"}.get(mod, mod))
                 except PackageNotFoundError:

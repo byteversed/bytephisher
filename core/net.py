@@ -15,8 +15,10 @@ import threading
 import urllib.error
 import urllib.request
 
+from . import __version__
+
 _LOCK = threading.RLock()
-_DEFAULT_UA = "bytephisher/1.0"
+_DEFAULT_UA = f"bytephisher/{__version__}"
 
 
 class ipv4_only:

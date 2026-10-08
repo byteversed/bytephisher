@@ -33,6 +33,8 @@ SUITES = [
      "reverse-proxy engine: rewrite, hook, cookie isolation, capture, CLI"),
     ("intel", ["-m", "pytest", "tests/test_intel.py", "-q", "--timeout=120"],
      "deep device dump: analysis, merge, transport, storage, CLI"),
+    ("security", ["-m", "pytest", "tests/test_security.py", "-q", "--timeout=120"],
+     "adversarial: SSRF, XSS, session/cookie, limits, CSV, gating"),
     ("live", ["-m", "pytest", "tests/test_live.py", "-q", "--timeout=300"],
      "live internet / SMTP / tunnels"),
 ]

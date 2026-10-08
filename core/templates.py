@@ -3,9 +3,10 @@
 # optional otp.html. We render index.html with Jinja2 so {{ site_name }} etc.
 # work. Non-Jinja2 templates (plain HTML) are served as-is with light
 # placeholder substitution.
-import os
 import json
-from jinja2 import Environment, FileSystemLoader, TemplateNotFound
+import os
+
+from jinja2 import Environment
 
 _env = Environment(autoescape=True)
 

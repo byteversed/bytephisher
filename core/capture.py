@@ -12,11 +12,25 @@
 # execution on one connection corrupted memory and SEGFAULTED the process
 # (reproduced: pytest tests/test_proxy.py tests/test_gaps.py → "Fatal Python
 # error: Segmentation fault ... core/capture.py in since()").
-import sqlite3
-import os
-import time
 import json
+import os
+import sqlite3
 import threading
+import time
+
+
+def _csv_safe(v):
+    """Neutralise spreadsheet formula injection.
+
+    A captured value beginning with = + - @ (or tab/CR) is executed as a formula
+    by Excel/Sheets when the operator opens the export. Prefixing an apostrophe
+    keeps the value readable and inert.
+    """
+    t = "" if v is None else str(v)
+    if t[:1] in ("=", "+", "-", "@", "\t", "\r"):
+        return "'" + t
+    return t
+
 
 class CaptureDB:
     def __init__(self, db_path):
@@ -190,7 +204,15 @@ class CaptureDB:
         credible = self.conn.execute(
             f"SELECT COUNT(*) FROM captures{where}{' AND' if campaign else ' WHERE'}"
             " is_cred=1 AND risk < 30", args).fetchone()[0]
-        visitors = self.conn.execute("SELECT COUNT(*) FROM visitors").fetchone()[0]
+        if campaign:
+            # visitors are not campaign-tagged in the schema, so scope them to
+            # the distinct (ip, ua) pairs that actually submitted to THIS
+            # campaign — the global count made every campaign report wrong
+            visitors = self._conn().execute(
+                "SELECT COUNT(*) FROM (SELECT DISTINCT ip, ua FROM captures "
+                "WHERE campaign=?)", (campaign,)).fetchone()[0]
+        else:
+            visitors = self._conn().execute("SELECT COUNT(*) FROM visitors").fetchone()[0]
         return {"total_captures": total, "credentials": creds, "visitors": visitors,
                 "credible_credentials": credible}
 
@@ -322,11 +344,13 @@ class CaptureDB:
                         "isp", "device", "is_cred", "risk", "risk_reasons", "fields"])
             for c in self.all(limit=1000000, campaign=campaign):
                 w.writerow([
-                    c["ts"], c["campaign"], c["source_url"], c["ip"], c["city"],
-                    c["country"], c["isp"], c["device"],
+                    c["ts"], _csv_safe(c["campaign"]), _csv_safe(c["source_url"]),
+                    _csv_safe(c["ip"]), _csv_safe(c["city"]),
+                    _csv_safe(c["country"]), _csv_safe(c["isp"]), _csv_safe(c["device"]),
                     "YES" if c["is_cred"] else "NO",
-                    c["risk"], "; ".join(c["risk_reasons"]),
-                    "; ".join(f"{k}={v}" for k, v in c["fields"].items())
+                    c["risk"], _csv_safe("; ".join(c["risk_reasons"])),
+                    _csv_safe("; ".join(f"{k}={_csv_safe(v)}"
+                                        for k, v in c["fields"].items()))
                 ])
         return path
 

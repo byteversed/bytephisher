@@ -18,7 +18,6 @@ import urllib.parse
 import urllib.request
 
 import pytest
-
 from conftest import free_port
 
 from core import capture as cap

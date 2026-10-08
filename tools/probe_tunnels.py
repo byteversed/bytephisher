@@ -18,8 +18,8 @@ import urllib.request
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
-from core import server as srv                      # noqa: E402
-from tunnels import REGISTRY, run_one, stop_all, running   # noqa: E402
+from core import server as srv  # noqa: E402
+from tunnels import REGISTRY, run_one, running, stop_all  # noqa: E402
 
 TEMPLATES = os.path.join(HERE, "templates")
 

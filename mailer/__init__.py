@@ -3,9 +3,6 @@
 # Variable substitution: {{To_FirstName}}, {{To_Address}}, {{From_Name}},
 # {{Phish_URL}}, etc.
 import smtplib
-import json
-import os
-import re
 from email.message import EmailMessage
 
 TEMPLATES = {

@@ -2,7 +2,7 @@ FROM python:3.11-slim
 
 LABEL org.opencontainers.image.title="BytePhisher" \
       org.opencontainers.image.description="Advanced phishing-simulation framework (authorized engagements)" \
-      org.opencontainers.image.version="1.0"
+      org.opencontainers.image.version="0.1.0"
 
 WORKDIR /app
 

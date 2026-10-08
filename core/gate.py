@@ -13,12 +13,9 @@
 # the campaign looks inert instead of obviously malicious.
 import time
 
-DATACENTER_MARKERS = (
-    "ovh", "hetzner", "digitalocean", "linode", "vultr", "contabo", "choopa",
-    "amazon", "aws", "google cloud", "azure", "oracle cloud", "cloudflare",
-    "m247", "leaseweb", "scaleway", "upcloud", "hostinger", "alibaba cloud",
-    "tencent", "rackspace", "colo", "hosting", "datacenter", "data center",
-)
+from . import classify
+
+DATACENTER_MARKERS = classify.DATACENTER_MARKERS
 
 WEEKDAYS = {"mon": 0, "tue": 1, "wed": 2, "thu": 3, "fri": 4, "sat": 5, "sun": 6}
 
@@ -49,17 +46,40 @@ def parse_days(value):
 
 
 def parse_hours(value):
-    """'9-18' -> (9, 18). Returns None when malformed/unset."""
+    """'9-18' or '9:30-17:45' -> (start, end) in minutes.
+
+    Raises ValueError on anything degenerate or unparseable: silently returning
+    None used to disable the time gate entirely, so an operator who typed
+    '--active-hours 9-9' believed a restriction was in force when it was not.
+    """
     if not value:
         return None
+
+    def to_min(tok, allow_end=False):
+        tok = tok.strip()
+        if ":" in tok:
+            h, _, m = tok.partition(":")
+            h, m = int(h), int(m)
+        else:
+            h, m = int(tok), 0
+        # 24:00 is a legitimate "end of day" sentinel ("--active-hours 0-24")
+        if allow_end and h == 24 and m == 0:
+            return 1440
+        if not (0 <= h <= 23 and 0 <= m <= 59):
+            raise ValueError(f"hour out of range: {tok}")
+        return h * 60 + m
+
     try:
         a, _, b = str(value).partition("-")
-        start, end = int(a), int(b)
-        if 0 <= start <= 23 and 0 <= end <= 24 and start < end:
-            return (start, end)
-    except (TypeError, ValueError):
-        pass
-    return None
+        start, end = to_min(a), to_min(b, allow_end=True)
+    except Exception as e:
+        raise ValueError(f"bad --active-hours '{value}' (use 9-18 or 9:30-17:45)") from e
+    if start == end:
+        raise ValueError(f"--active-hours '{value}' is empty (start == end) — "
+                         f"remove the flag or widen the window")
+    if start > end:
+        raise ValueError(f"--active-hours '{value}' is inverted (start > end)")
+    return (start, end)
 
 
 class Gate:
@@ -111,9 +131,13 @@ class Gate:
             if time.localtime(now).tm_wday not in self.days:
                 return False, "outside active weekdays"
         if self.hours is not None:
-            start, end = self.hours
-            if not (start <= time.localtime(now).tm_hour < end):
-                return False, f"outside active hours ({start}:00-{end}:00)"
+            start, end = self.hours                      # minutes since midnight
+            lt = time.localtime(now)
+            cur = lt.tm_hour * 60 + lt.tm_min
+            if not (start <= cur < end):
+                def hhmm(m):
+                    return f"{m // 60:02d}:{m % 60:02d}"
+                return False, f"outside active hours ({hhmm(start)}-{hhmm(end)})"
         if self.max_hits:
             if self.hits(ip, now) >= self.max_hits:
                 return False, f"hit cap reached ({self.max_hits} per {self.window}s)"
@@ -121,8 +145,8 @@ class Gate:
 
     @staticmethod
     def _is_datacenter(isp):
-        isp = (isp or "").lower()
-        return any(m in isp for m in DATACENTER_MARKERS) if isp else False
+        """One rule for the whole tool (core/classify.py)."""
+        return classify.is_datacenter(isp)
 
     # ---- hit window ----
     def note_hit(self, ip, now=None):
@@ -139,6 +163,10 @@ class Gate:
         cutoff = now - self.window
         return len([t for t in self._hits.get(ip, []) if t >= cutoff])
 
+    @staticmethod
+    def _hhmm(m):
+        return f"{m // 60:02d}:{m % 60:02d}"
+
     def describe(self):
         bits = []
         if self.allow:
@@ -151,7 +179,7 @@ class Gate:
             bits.append("days " + ",".join(sorted(WEEKDAYS, key=WEEKDAYS.get) and
                                              [k for k, v in sorted(WEEKDAYS.items(), key=lambda kv: kv[1]) if v in self.days]))
         if self.hours:
-            bits.append(f"hours {self.hours[0]}-{self.hours[1]}")
+            bits.append(f"hours {self._hhmm(self.hours[0])}-{self._hhmm(self.hours[1])}")
         if self.max_hits:
             bits.append(f"cap {self.max_hits}/{self.window}s")
         return " | ".join(bits) if bits else "off"

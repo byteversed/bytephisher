@@ -12,6 +12,8 @@ bytephisher.py                 CLI: flags, banner, live loop, session summary
 │   │     make_handler() · serve()
 │   ├── proxy.py               reverse-proxy engine (real site, hook injected)
 │   │     Phishlet · ProxySession · ProxyEngine · serve_proxy()
+│   ├── classify.py            shared rules: credential pairs, device class,
+│   │     datacenter markers (server + proxy + risk + gate)
 │   ├── intel.py               deep device intelligence (merge waves, device
 │   │     token, headless + VPN scoring, CLI dump renderer)
 │   ├── capture.py             SQLite capture store (per-thread connections)

@@ -56,11 +56,11 @@ py-modules = ["bytephisher"]
 packages = ["core", "tunnels", "dashboard", "mailer", "tools"]
 
 [tool.setuptools.package-data]
-core = ["../config/*.yaml"]
-"*" = ["*.json"]
-# the browser-side collector is a data file, not a python module
-bytephisher = ["assets/*.js"]
-assets = ["*.js"]
+# the browser-side collector and the config live next to the code, not inside a
+# package: declare them at the distribution root instead of "../" globs (which
+# silently package nothing)
+"*" = ["*.json", "*.yaml"]
+bytephisher = ["assets/*.js", "config/*.yaml", "config/phishlets/*.yaml"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

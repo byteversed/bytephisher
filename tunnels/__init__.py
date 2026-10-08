@@ -5,8 +5,8 @@ import os
 import re
 import shutil
 import subprocess
-import time
 import sys
+import time
 
 LOCAL_PORT_PLACEHOLDER = "{port}"
 
@@ -196,9 +196,16 @@ class Ngrok(Tunneler):
 
     def start(self):
         if not self.ensure_binary():
+            self.reason = "ngrok binary missing (download it from ngrok.com)"
             return None
         _bg([self.bin_path, "http", str(self.port)], self.log)
-        return _wait_url(self.url_pattern, self.log, 20)
+        url = _wait_url(self.url_pattern, self.log, 20)
+        if not url:
+            self._explain_failure()
+            if not self.reason:
+                self.reason = ("ngrok did not print a URL — a free account now needs "
+                               "an authtoken (ngrok config add-authtoken …)")
+        return url
 
 class LocalHostRun(Tunneler):
     name = "localhost_run"
@@ -244,7 +251,11 @@ class Bore(Tunneler):
         if self._resolve([self.BINARY]):
             return True
         # auto-download the prebuilt musl binary from GitHub releases
-        import urllib.request, tarfile, io, json as _json, platform
+        import io
+        import json as _json
+        import platform
+        import tarfile
+        import urllib.request
         if platform.machine() not in ("x86_64", "AMD64", "aarch64", "arm64"):
             return False
         arch = "aarch64" if platform.machine() in ("aarch64", "arm64") else "x86_64"
@@ -317,7 +328,7 @@ def run_all(port):
         try:
             t = cls(port)
             results[name] = t.start()
-            LAST_REASON[name] = t.reason
+            LAST_REASON[name] = t.reason or ("" if results[name] else f"no public URL — see {t.log}")
         except Exception as e:
             print(f"[bytephisher] {name} failed: {e}")
             LAST_REASON[name] = str(e)
@@ -331,7 +342,8 @@ def run_one(name, port):
     t = cls(port)
     url = t.start()
     # keep the reason reachable for the CLI ("FAILED" alone helps nobody)
-    LAST_REASON[name] = t.reason
+    LAST_REASON[name] = t.reason or (
+        "" if url else f"no public URL — see {t.log}")
     return url
 
 
