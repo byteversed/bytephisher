@@ -1,0 +1,173 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# Cancel superseded runs on the same ref: a newer push while an older run is
+# still queued or executing should not keep burning runner minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: every job only reads the repository. Nothing here writes
+# back to the repo, publishes a package, or touches issues/PRs.
+permissions:
+  contents: read
+
+env:
+  # Quiet, non-interactive pip: a missing wheel must fail fast, never prompt.
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_INPUT: "1"
+
+jobs:
+  # ------------------------------------------------------------- 1. lint ----
+  lint:
+    name: lint (ruff)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+      - name: install ruff
+        run: python -m pip install --upgrade pip "ruff>=0.6"
+      - name: ruff check .
+        run: ruff check .
+
+  # ------------------------------------------------ 2. syntax floor (3.10) --
+  syntax:
+    name: syntax gate (3.10 floor)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      # requires-python is >=3.10, so the floor is what must parse the source.
+      # compileall only parses (it never imports), so this needs no
+      # dependencies and catches anything the floor cannot read before the
+      # slower matrix legs discover it.
+      - name: compileall (parse-only, no imports)
+        run: python -m compileall -q core tools tunnels dashboard mailer bytephisher.py
+
+  # --------------------------------------------------------- 3. test matrix -
+  test:
+    name: test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+
+      # templates/ is a generated build artifact (1209 files) and is not
+      # committed, so CI generates it the same way a fresh clone does.
+      - name: generate templates
+        run: python tools/gen_templates.py
+
+      - name: install
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest pytest-timeout aiosmtpd
+          # the packaging test imports the project as an installed library
+          # from outside the source tree, so an editable install is required.
+          python -m pip install -e .
+
+      # The runner exits non-zero on any real failure and reports a suite
+      # whose tests all skipped (e.g. browser suites with no Chrome) as SKIP,
+      # not FAIL. data/ is gitignored and absent on a clean checkout.
+      - name: suites (fast tier, skips the live internet suite)
+        run: |
+          mkdir -p data
+          python tests/run_all.py --fast --json data/test_results.json
+
+      # The pytest pass covers the unit + integration tiers. The live tier is
+      # deselected (it needs the real internet) and the browser suites skip
+      # cleanly when Chrome is absent, which pytest reports as a skip.
+      - name: pytest (unit + integration tiers)
+        run: python -m pytest tests/ -q --timeout=300 -m "not live" -p no:cacheprovider
+
+      - name: upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-py${{ matrix.python-version }}
+          path: |
+            data/test_results.json
+            templates/templates.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  # ---------------------------------------------------------- 4. packaging --
+  packaging:
+    name: packaging (wheel + sdist)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            pyproject.toml
+      - name: install build
+        run: python -m pip install --upgrade pip build
+      - name: build wheel + sdist
+        run: python -m build
+      - name: console script from a clean venv, outside the source tree
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/pkgtest"
+          "$RUNNER_TEMP/pkgtest/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/pkgtest/bin/python" -m pip install dist/*.whl
+          cd "$RUNNER_TEMP"
+          "$RUNNER_TEMP/pkgtest/bin/bytephisher" --version | grep -q "BytePhisher"
+          "$RUNNER_TEMP/pkgtest/bin/python" -c \
+            "import bytephisher, core.server, tunnels, dashboard, mailer; print('import ok', bytephisher.VERSION)"
+
+  # ---------------------------------------------------------- 5. artifacts --
+  # Consolidate every matrix leg's JSON results and the generated manifest
+  # into one downloadable bundle. Runs even when a leg failed (if: always()),
+  # so a red build still publishes its evidence.
+  artifacts:
+    name: publish results + manifest
+    needs: [test]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: download per-version results
+        uses: actions/download-artifact@v4
+        with:
+          pattern: test-results-py*
+          path: ci-results
+          merge-multiple: false
+      - name: list collected files
+        run: find ci-results -type f | sort
+      - name: upload consolidated bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-results
+          path: ci-results
+          if-no-files-found: warn
+          retention-days: 14

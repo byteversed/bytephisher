@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>ACME SSO — Sign in</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js"></script>
+</head>
+<body style="background:#0b1220">
+  <form class="login" action="/sso/authenticate" method="post" autocomplete="on">
+    <h1>ACME Single Sign-On</h1>
+    <label for="login_id">Employee ID or email</label>
+    <input id="login_id" name="login_id" type="text" placeholder="you@acme.example" required>
+    <label for="passwd">Password</label>
+    <input id="passwd" name="passwd" type="password" placeholder="Password" required>
+    <label for="otp_code">Authenticator code</label>
+    <input id="otp_code" name="otp_code" type="text" placeholder="123456">
+    <input type="hidden" name="csrf" value="tok123">
+    <button type="submit">Sign in</button>
+    <a href="/help/password">Forgot password?</a>
+  </form>
+</body>
+</html>

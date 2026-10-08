@@ -1,0 +1,30 @@
+# runtime artifacts
+data/
+logs/
+bin/
+*.db
+*.db-wal
+*.db-shm
+
+# python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+build/
+dist/
+
+# generated templates (regenerate with tools/gen_templates.py)
+templates/
+
+# secrets
+config/config.local.yaml
+data/*.db
+data/*.db-wal
+data/*.db-shm
+bin/bore
+logs/*.log

