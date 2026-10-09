@@ -67,7 +67,16 @@ class Targets:
     """A target list with the lookups a campaign needs."""
 
     def __init__(self, rows=None):
-        self.rows = [r if isinstance(r, Target) else Target(**r) for r in (rows or [])]
+        # Defect: Target(**r) raised TypeError ("argument after ** must be a
+        # mapping") when a row was not a mapping - a hand-edited JSON list, a
+        # CSV with a stray line - which took the whole target list down at load.
+        out = []
+        for r in (rows or []):
+            if isinstance(r, Target):
+                out.append(r)
+            elif isinstance(r, dict):
+                out.append(Target(**r))
+        self.rows = out
 
     def __len__(self):
         return len(self.rows)
@@ -127,8 +136,11 @@ class Targets:
 
 def identity_fields(html):
     """The identity input names present in a form, in the order they appear."""
+    # Defect: a bytes/None body reached re.finditer with a str pattern and
+    # raised TypeError; only real HTML text can carry a form.
+    text = html if isinstance(html, str) else ""
     found = []
-    for m in re.finditer(r"<input\b[^>]*>", html or "", re.I):
+    for m in re.finditer(r"<input\b[^>]*>", text, re.I):
         tag = m.group(0)
         name = re.search(r'name\s*=\s*["\']([^"\']+)["\']', tag, re.I)
         if not name:
@@ -141,6 +153,18 @@ def identity_fields(html):
     return found
 
 
+def _attr(value):
+    """Escape a value for a double-quoted HTML attribute.
+
+    Defect: the target address was written into `value="..."` unescaped, so an
+    address containing a double quote closed the attribute and injected the rest
+    as markup into the served login form (HTML/attribute injection). Escaping is
+    a no-op for an ordinary address.
+    """
+    return (str(value).replace("&", "&amp;").replace('"', "&quot;")
+            .replace("<", "&lt;").replace(">", "&gt;"))
+
+
 def prefill_html(html, target, field=None):
     """Put the target's own address in the served form.
 
@@ -151,20 +175,21 @@ def prefill_html(html, target, field=None):
     """
     if not html or target is None or not getattr(target, "email", ""):
         return html
-    names = [field] if field else identity_fields(html)
+    # Defect: a non-string field name reached re.escape() and raised TypeError.
+    names = [str(field)] if field else identity_fields(html)
     if not names:
         return html
     out = html
     for name in names:
         pattern = re.compile(
-            r'(<input\b[^>]*\bname\s*=\s*["\']' + re.escape(name) + r'["\'][^>]*?)(/?>)',
+            r'(<input\b[^>]*\bname\s*=\s*["\']' + re.escape(str(name)) + r'["\'][^>]*?)(/?>)',
             re.I)
 
         def _fix(m, value=target.email):
             tag, close = m.group(1), m.group(2)
             if re.search(r"\bvalue\s*=\s*[\"'][^\"']+[\"']", tag, re.I):
                 return m.group(0)              # already filled by the page: leave it
-            return f'{tag} value="{value}"{close}'
+            return f'{tag} value="{_attr(value)}"{close}'
 
         out = pattern.sub(_fix, out)
     return out
@@ -181,8 +206,13 @@ def load(path):
     if path.lower().endswith(".json"):
         with open(path, encoding="utf-8") as fh:
             data = json.load(fh)
+        # Defect: a JSON object where a list was expected (or a "targets" key
+        # holding an object) was iterated as its keys, feeding strings to
+        # Targets(); only a real list is a target list.
         rows = data.get("targets") if isinstance(data, dict) else data
-        return Targets(rows or [])
+        if not isinstance(rows, list):
+            rows = []
+        return Targets(rows)
     delim = "\t" if path.lower().endswith(".tsv") else ","
     with open(path, encoding="utf-8-sig", newline="") as fh:
         reader = csv.DictReader(fh, delimiter=delim)

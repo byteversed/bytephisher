@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 
 import pytest
-from conftest import FIXTURES, TEMPLATES, StubHTTP, free_port
+from conftest import TEMPLATES, StubHTTP, free_port, self_signed_pair
 
 from core import capture as cap
 from core import server as srv
@@ -40,7 +40,7 @@ class ServerFixture:
             TEMPLATES, self.site_dir, self.port, self.db_path,
             geo_provider=geo, redirect_url=redirect, otp=otp,
             on_capture=notifier, site_name=self.site_name,
-            tls=tls, cert_path=os.path.join(FIXTURES, "cert_cert.pem") if tls else None)
+            tls=tls, cert_path=(self_signed_pair()[0] if tls else None))
         self.thread = threading.Thread(target=self.httpd.serve_forever, daemon=True)
         self.thread.start()
         self.db = cap.CaptureDB(self.db_path)
@@ -96,7 +96,7 @@ class TestGet:
         body = r.read().decode()
         assert r.status == 200
         assert r.headers["Content-Type"].startswith("text/html")
-        assert "Log in to Google" in body
+        assert "Sign in" in body and "Google" in body
         assert 'name="password"' in body and 'method="POST"' in body
 
     def test_catch_all_paths(self, srv_default):
@@ -275,7 +275,8 @@ class TestBehaviourModes:
         try:
             ctx = ssl._create_unverified_context()
             r = urllib.request.urlopen(s.base + "/", context=ctx, timeout=10)
-            assert r.status == 200 and "Log in to Google" in r.read().decode()
+            page = r.read().decode()
+            assert r.status == 200 and "Sign in" in page and "Google" in page
         finally:
             s.stop()
 

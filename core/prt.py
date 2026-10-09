@@ -18,7 +18,7 @@ that refusal is reported verbatim.
 session required (`RequireCompliantDevice`), is the account hybrid-joined, does the token
 carry CAE claims. That is the difference between a plan and a guess.
 
-Honest limits: the TPM-bound part cannot be reproduced off-device, so a phantom device is a
+Limits: the TPM-bound part cannot be reproduced off-device, so a phantom device is a
 *new* registration rather than a copy of the victim's; conditional access that requires a
 compliant or hybrid-joined device refuses it; and the whole chain is visible in the tenant's
 audit log as a device registration.
@@ -111,7 +111,11 @@ def register_device(access_token, display_name="DESKTOP-7F2A1", post=None, timeo
                              transport_key=str(answer.get("transportKey") or ""),
                              raw=answer)
     if not reg.device_id and not reg.object_id:
-        raise PrtError(f"the tenant answered without a device id: {str(answer)[:200]}")
+        # report the SHAPE, never the values: a device-registration answer can carry the
+        # transport key, and an exception message ends up in a log and a screenshot
+        keys = ", ".join(sorted(str(k) for k in answer)) if isinstance(answer, dict) else \
+            type(answer).__name__
+        raise PrtError(f"the tenant answered without a device id (keys: {keys or 'nothing'})")
     return reg
 
 
@@ -166,7 +170,11 @@ def _post_json(url, payload, access_token, post=None, timeout=15):
     import urllib.error
     import urllib.request
     if post is not None:
-        return post(url, payload, timeout, access_token)
+        # DEFECT: the injected transport returned the answer unchecked, so a Graph error body
+        # came back as a "successful" registration with empty ids (the refusal only surfaced as
+        # a misleading "no device id" message). core.federation and core.appconsent check the
+        # injected answer; this now does too.
+        return _check(post(url, payload, timeout, access_token))
     body = json.dumps(payload).encode()
     req = urllib.request.Request(url, data=body, headers={
         "Content-Type": "application/json", "Accept": "application/json",
@@ -182,6 +190,13 @@ def _post_json(url, payload, access_token, post=None, timeout=15):
         answer = json.loads(raw)
     except ValueError as e:
         raise PrtError(f"non-JSON answer from {url}: {raw[:200]}") from e
+    return _check(answer)
+
+
+def _check(answer):
+    """A Graph error becomes a refusal, whatever carried the answer."""
     if isinstance(answer, dict) and answer.get("error"):
-        raise PrtError(f"the tenant refused: {str(answer.get('error'))[:200]}")
+        err = answer["error"]
+        msg = err.get("message") if isinstance(err, dict) else str(err)
+        raise PrtError(f"the tenant refused: {msg}")
     return answer if isinstance(answer, dict) else {"raw": answer}

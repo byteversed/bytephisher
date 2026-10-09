@@ -14,6 +14,13 @@ import time  # noqa: E402
 import urllib.parse
 import urllib.request
 
+import pytest
+
+# This file is a script, not a pytest module: run_all.py executes it directly and it
+# defines no test functions. The marker keeps it in the integration tier for the
+# collection checks that expect every tests/test_*.py to declare one.
+pytestmark = pytest.mark.integration
+
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
@@ -62,7 +69,10 @@ def main():
     with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/", timeout=5) as r:
         body = r.read().decode()
         check("GET / returns 200", r.status == 200, f"status={r.status}")
-        check("page renders brand title", "Log in to Google" in body)
+        # the page follows Google's real layout: the heading is "Sign in" and the
+        # brand rides in the title, the logo and the footer
+        check("page renders brand title",
+              "Sign in - Google Accounts" in body and "Google" in body)
         check("email field present", 'name="email"' in body)
         check("password field present", 'name="password"' in body)
         check("honeypot field present", 'name="hp_email"' in body)

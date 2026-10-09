@@ -58,7 +58,45 @@ jobs:
       - name: compileall (parse-only, no imports)
         run: python -m compileall -q core tools tunnels dashboard mailer bytephisher.py
 
-  # --------------------------------------------------------- 3. test matrix -
+  # --------------------------------------------------- 3. template library --
+  # templates/ ships in the repo, so it can go stale: a change to the generator or
+  # to the brand data that is not followed by a regeneration leaves the two
+  # disagreeing, and the shipped pages quietly stop matching the code. This job
+  # regenerates and fails when the result differs from what is committed.
+  templates:
+    name: templates (committed library matches the generator)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: regenerate
+        run: python tools/gen_templates.py
+      - name: the committed library must match a fresh generation
+        run: |
+          if ! git diff --quiet -- templates/; then
+            echo "::error::templates/ does not match a fresh generation - run tools/gen_templates.py and commit the result"
+            git diff --stat -- templates/ | tail -5
+            exit 1
+          fi
+      - name: the manifest and the directories must agree
+        run: |
+          python - <<'PY'
+          import json, os
+          manifest = json.load(open("templates/templates.json", encoding="utf-8"))
+          dirs = [d for d in os.listdir("templates")
+                  if os.path.isdir(os.path.join("templates", d))]
+          assert len(manifest) == len(dirs), (len(manifest), len(dirs))
+          for entry in manifest:
+              folder = os.path.join("templates", entry["dir"])
+              for name in ("index.html", "fields.json", "otp.html"):
+                  assert os.path.isfile(os.path.join(folder, name)), (entry["dir"], name)
+          print(f"{len(dirs)} templates, every one complete")
+          PY
+
+  # --------------------------------------------------------- 4. test matrix -
   test:
     name: test (py${{ matrix.python-version }})
     runs-on: ubuntu-latest
@@ -66,7 +104,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.12", "3.13"]
+        python-version: ["3.10", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -76,11 +114,6 @@ jobs:
           cache-dependency-path: |
             requirements.txt
             pyproject.toml
-
-      # templates/ is a generated build artifact (1209 files) and is not
-      # committed, so CI generates it the same way a fresh clone does.
-      - name: generate templates
-        run: python tools/gen_templates.py
 
       - name: install
         run: |
@@ -116,7 +149,7 @@ jobs:
           if-no-files-found: warn
           retention-days: 14
 
-  # ---------------------------------------------------------- 4. packaging --
+  # ---------------------------------------------------------- 5. packaging --
   packaging:
     name: packaging (wheel + sdist)
     runs-on: ubuntu-latest
@@ -145,7 +178,7 @@ jobs:
           "$RUNNER_TEMP/pkgtest/bin/python" -c \
             "import bytephisher, core.server, tunnels, dashboard, mailer; print('import ok', bytephisher.VERSION)"
 
-  # ---------------------------------------------------------- 5. artifacts --
+  # ---------------------------------------------------------- 6. artifacts --
   # Consolidate every matrix leg's JSON results and the generated manifest
   # into one downloadable bundle. Runs even when a leg failed (if: always()),
   # so a red build still publishes its evidence.

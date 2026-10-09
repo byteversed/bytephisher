@@ -116,7 +116,11 @@ class Gate:
                  block_researchers=False, blocklist_file="", allow_asn=None,
                  block_asn=None, max_hits_per_device=0, detonation_asn=None,
                  detonation_cidr=None, cloak=False):
-        self.allow = {c.strip().upper() for c in (allow_countries or []) if c.strip()}
+        # Defect: a country list entry that was not a string (a config typo, an
+        # int from YAML) raised AttributeError on .strip() at construction and
+        # took the whole campaign down; str() makes it a value, not a crash.
+        self.allow = {str(c).strip().upper() for c in (allow_countries or [])
+                      if str(c or "").strip()}
         self.allow_asn = {_asn_key(a) for a in (allow_asn or []) if _asn_key(a)}
         self.block_asn = {_asn_key(a) for a in (block_asn or []) if _asn_key(a)}
         self.max_hits_per_device = int(max_hits_per_device or 0)
@@ -136,7 +140,8 @@ class Gate:
             # a scanner, refuse the researcher networks, and never show our page to a
             # detonation range
             self.block_researchers = True
-        self.block = {c.strip().upper() for c in (block_countries or []) if c.strip()}
+        self.block = {str(c).strip().upper() for c in (block_countries or [])
+                      if str(c or "").strip()}
         self.block_datacenter = bool(block_datacenter)
         self.hours = parse_hours(active_hours) if not isinstance(active_hours, tuple) else active_hours
         self.days = parse_days(active_days) if not isinstance(active_days, (set, frozenset)) else active_days
@@ -189,7 +194,10 @@ class Gate:
             except Exception:
                 pass
             score += _ua_bot_score(ua, reasons)
-            if intel:
+            # Defect: `if intel:` then intel.get(...) raised AttributeError when
+            # a caller passed a non-dict (a string/bool from a config or a
+            # mis-wired probe), crashing the per-request gate. Guard the type.
+            if intel and isinstance(intel, dict):
                 hs = intel.get("headless_score")
                 if isinstance(hs, (int, float)) and hs >= 60:
                     # the dump is already a 0-100 automation score with its own
@@ -305,7 +313,13 @@ class Gate:
         """(over, count) for the device cap: `extra` is the count already in the store."""
         if not self.max_hits_per_device or not device_token:
             return False, 0
-        count = self.device_hits(device_token, now) + int(extra or 0)
+        # Defect: int(extra) raised ValueError on a non-numeric stored count,
+        # crashing the gate; a malformed count must not become a bypass.
+        try:
+            extra = int(extra or 0)
+        except (TypeError, ValueError):
+            extra = 0
+        count = self.device_hits(device_token, now) + extra
         return count >= self.max_hits_per_device, count
 
     def note_hit(self, ip, now=None):

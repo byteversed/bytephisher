@@ -23,7 +23,8 @@ from core import pretexts as P  # noqa: E402
 from core import server as srv  # noqa: E402
 from core import targets as T  # noqa: E402
 
-pytestmark = pytest.mark.unit
+# integration: serves pages over a real local socket
+pytestmark = pytest.mark.integration
 
 
 class TestThePretextLibrary:
@@ -107,7 +108,7 @@ class TestTheTargetList:
         assert len(store) == 2 and store.emails() == ["ravi@corp.test", "sita@corp.test"]
 
     def test_extra_columns_reach_the_context(self, tmp_path):
-        store = T.load(self._csv(tmp_path, ["ravi@corp.test,Ravi Kumar,finance,tok-1,APAC"]))
+        store = T.load(self._csv(tmp_path, ["ravi@corp.test,Ravi Nair,finance,tok-1,APAC"]))
         t = store.by_token("tok-1")
         ctx = t.context()
         assert ctx["To_FirstName"] == "Ravi" and ctx["Role"] == "finance"
@@ -138,7 +139,7 @@ class TestTheTargetList:
         assert hit.email == "a@b.test"
 
     def test_the_first_name_is_derived_when_the_list_has_none(self):
-        t = T.Target(email="ravi.kumar@corp.test")
+        t = T.Target(email="ravi.nair@corp.test")
         assert t.first_name == "Ravi"
 
     def test_the_summary_reports_the_roles(self):

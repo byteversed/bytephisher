@@ -7,7 +7,7 @@ to that attribute can add a credential it owns the private half of, and from the
 authenticates as the target with PKINIT: no password, no password reset that matters, and the
 change is one attribute value.
 
-This module does the two halves that a session-based tool can honestly do:
+This module does the two halves a session-based tool can do:
   * build the `B:<hex>` value (the KEY_CREDENTIAL structure)
   * write it through the LDAP client this tool already has (`core.ldap.LdapClient.modify`)
 

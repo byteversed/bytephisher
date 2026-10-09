@@ -38,6 +38,25 @@ class Cohort:
                 "pretext": self.pretext, "locale": self.locale, "notes": self.notes}
 
 
+# The keys a cohort row may carry. A cohort file is operator data and often carries
+# extra columns (a label, a comment); building Cohort(**row) straight from it raised
+# TypeError on the first unknown key and aborted the whole campaign.
+_COHORT_FIELDS = ("name", "weight", "variant", "pretext", "locale", "notes")
+
+
+def _cohort_from(row):
+    """A Cohort from a row, or None when the row is not a usable cohort.
+
+    Unknown keys are ignored and a non-mapping row is dropped, so an empty or
+    malformed cohort file degrades to "no cohorts" instead of a traceback.
+    """
+    if isinstance(row, Cohort):
+        return row
+    if not isinstance(row, dict):
+        return None
+    return Cohort(**{k: row[k] for k in _COHORT_FIELDS if k in row})
+
+
 # The dimensions worth testing, cheapest first. A variant is a value on one of these.
 VARIANTS = {
     "lure_shape": ("link", "qr", "attachment", "calendar"),
@@ -54,8 +73,7 @@ class Campaign:
     def __init__(self, cohorts=None, name="", salt=""):
         self.name = str(name or "")
         self.salt = str(salt or "")
-        self.cohorts = [c if isinstance(c, Cohort) else Cohort(**c)
-                        for c in (cohorts or [])]
+        self.cohorts = [c for c in (_cohort_from(r) for r in (cohorts or [])) if c]
 
     def __len__(self):
         return len(self.cohorts)

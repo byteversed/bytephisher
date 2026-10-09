@@ -12,7 +12,7 @@ account's password is not in the ticket), and it works until the krbtgt key is r
 Implemented here: the RC4-HMAC encryption (pure Python, stdlib only), the EncTicketPart and
 Ticket structures, and the KRB-CRED (`kirbi`) blob that tooling injects.
 
-Honest limits, stated because an operator is spending a very loud primitive:
+Limits, stated because this is a very loud primitive:
   * RC4 (etype 23) is implemented; AES needs a pure-Python AES or the optional `cryptography`
     package, and the module says which it needs rather than half-working
   * the krbtgt hash has to come from somewhere (DCSync, a dump, or a backup) - this module does

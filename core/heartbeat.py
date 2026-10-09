@@ -135,7 +135,7 @@ def _age_days(created):
 
 
 def domain_age_verdict(age_days):
-    """What the age means for deliverability, honestly and without a provider's internals."""
+    """What the age means for deliverability, from public DNS alone."""
     if age_days is None:
         return {"verdict": "unknown", "why": "no registration date was returned"}
     if age_days < YOUNG_DOMAIN_DAYS:

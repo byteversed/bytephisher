@@ -126,7 +126,14 @@ class Pool:
 
     @classmethod
     def load(cls, path):
-        """Read a pool file; a missing or unreadable file gives an empty pool, not a crash."""
+        """Read a pool file; a missing or unreadable file gives an empty pool, not a crash.
+
+        A DIRECTORY where a pool file is expected is refused instead: returning an empty
+        pool for it made `--pool <dir> --pool-status` report "0 hostname(s)" and exit 0,
+        which reads as a healthy empty pool rather than as the wrong path.
+        """
+        if path and os.path.isdir(path):
+            raise IsADirectoryError(f"{path} is a directory, not a pool file")
         if not path or not os.path.isfile(path):
             return cls(path=path)
         try:

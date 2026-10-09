@@ -1,9 +1,14 @@
 # pytest bootstrap: make the project importable and share helpers.
 import contextlib
 import os
+import shutil
 import socket
+import subprocess
 import sys
+import tempfile
 import threading
+
+import pytest
 
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if HERE not in sys.path:
@@ -15,7 +20,6 @@ if HERE not in sys.path:
 os.environ["BYTEPHISHER_HOME"] = HERE
 
 TEMPLATES = os.path.join(HERE, "templates")
-FIXTURES = os.path.join(HERE, "tests", "fixtures")
 
 
 def ensure_templates():
@@ -52,6 +56,29 @@ def repo_env(**over):
     env.update(over)
     return env
 
+
+
+def self_signed_pair():
+    """A throwaway self-signed cert/key pair, generated on demand.
+
+    The pair used to be committed under tests/fixtures. A private key does not belong in
+    a repository - GitHub's secret scanning flags one, and a clone would ship it - and the
+    files are only ever read by the TLS path, so they are made here instead. The names are
+    kept (cert_cert.pem / cert_key.pem) because core/server.py derives the key path FROM
+    the cert path, and that derivation is part of what the TLS test exercises.
+    """
+    if not shutil.which("openssl"):
+        pytest.skip("openssl is not installed, so no test certificate can be made")
+    directory = tempfile.mkdtemp(prefix="bp_tls_")
+    cert = os.path.join(directory, "cert_cert.pem")
+    key = os.path.join(directory, "cert_key.pem")
+    done = subprocess.run(
+        ["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key,
+         "-out", cert, "-days", "1", "-subj", "/CN=bytephisher.local"],
+        capture_output=True, text=True, timeout=90)
+    if done.returncode != 0 or not os.path.isfile(cert) or not os.path.isfile(key):
+        pytest.skip(f"openssl could not make a test certificate: {done.stderr[-200:]}")
+    return cert, key
 
 def free_port():
     """Ask the OS for a free TCP port (avoids hardcoded-port collisions)."""

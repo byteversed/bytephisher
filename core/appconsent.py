@@ -222,7 +222,14 @@ def app_token(client_id, client_secret, tenant="common", scope="https://graph.mi
     if not client_id or not client_secret:
         raise AppConsentError("an app-only token needs the client id and the secret")
     from urllib.parse import urlencode
-    url = f"https://login.microsoftonline.com/{tenant or 'common'}/oauth2/v2.0/token"
+
+    from core.oauth import tenant_is_safe
+    tenant = tenant or "common"
+    # DEFECT (URL/path injection): the tenant went straight into the token URL, so a value
+    # from a target could point the exchange at a different path.
+    if not tenant_is_safe(tenant):
+        raise AppConsentError(f"tenant {tenant!r} is not a safe host segment")
+    url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
     data = {"grant_type": "client_credentials", "client_id": client_id,
             "client_secret": client_secret, "scope": scope}
     if post is not None:
@@ -283,7 +290,16 @@ def consent_url(client_id, redirect_uri, scopes=None, tenant="common", state="",
                              "https://graph.microsoft.com/Mail.Read",
                              "https://graph.microsoft.com/Files.ReadWrite.All"])
     from urllib.parse import quote, urlencode
-    base = (issuer or f"https://login.microsoftonline.com/{tenant or 'common'}/oauth2/v2.0")
+
+    from core.oauth import tenant_is_safe
+    if issuer:
+        base = issuer
+    else:
+        tenant = tenant or "common"
+        # DEFECT (URL/path injection): the tenant went straight into the consent URL.
+        if not tenant_is_safe(tenant):
+            raise AppConsentError(f"tenant {tenant!r} is not a safe host segment")
+        base = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0"
     query = urlencode({"client_id": client_id, "response_type": "code",
                        "redirect_uri": redirect_uri, "response_mode": "query",
                        "scope": " ".join(wanted), "prompt": prompt, "state": state or ""})

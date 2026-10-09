@@ -1,7 +1,7 @@
 """The token-theft tier: replayability, scope swap and the PRT/phantom-device chain.
 
 Everything here is driven with injected transports, so no test touches a tenant. The point of
-each assertion is the honest answer: which of these paths is open, and which is refused by a
+each assertion answers directly: which of these paths is open, and which is refused by a
 control the operator cannot see from the outside.
 """
 import base64

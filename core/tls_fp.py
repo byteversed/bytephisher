@@ -202,7 +202,7 @@ def ja3_full(hello, drop_grease=True):
             "supported_versions": hello.get("supported_versions") or []}
 
 
-# GREASE: the reserved values a client may insert to keep servers honest. They are ignored
+# GREASE: the reserved values a client may insert to keep servers interoperable. They are ignored
 # everywhere in JA4 - in the cipher list, the extension list, supported_versions and the
 # signature algorithms - and they are excluded from both counts.
 GREASE = {0x0A0A, 0x1A1A, 0x2A2A, 0x3A3A, 0x4A4A, 0x5A5A, 0x6A6A, 0x7A7A,

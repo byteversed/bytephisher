@@ -599,7 +599,7 @@ class TestKillChainCaptureThenTakeover:
 class TestThePersistencePolicy:
     """a cookie-less page view minted a session and the engine saved it, so
     300 requests produced 300 durable rows. The record is now written by the paths that
-    capture something; `session_save` itself stays honest (it saves what it is given)."""
+    capture something; `session_save` itself keeps that contract (it saves what it is given)."""
 
     def test_an_explicit_save_is_always_honoured(self):
         from core import capture as cap

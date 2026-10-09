@@ -91,12 +91,12 @@ class TestTheMessageOnTheWire:
         send_smtp("127.0.0.1", port, "it@corp.test", "", "Payroll Q3",
                   "<p>Open it</p>", "ravi@corp.test", html=True,
                   from_name="IT Support", reply_to="helpdesk@corp.test",
-                  to_name="Ravi Kumar", in_reply_to="<thread-1@corp.test>",
+                  to_name="Ravi Nair", in_reply_to="<thread-1@corp.test>",
                   references="<thread-1@corp.test>")
         assert len(srv.messages) == 1
         msg = message_from_bytes(srv.messages[0])
         assert msg["From"] == "IT Support <it@corp.test>"
-        assert msg["To"] == "Ravi Kumar <ravi@corp.test>"
+        assert msg["To"] == "Ravi Nair <ravi@corp.test>"
         assert msg["Reply-To"] == "helpdesk@corp.test"
         assert msg["In-Reply-To"] == "<thread-1@corp.test>"
         assert msg["References"] == "<thread-1@corp.test>"
@@ -112,10 +112,10 @@ class TestTheMessageOnTheWire:
     def test_a_calendar_invite_attaches_and_parses(self, smtp):
         icalendar = pytest.importorskip("icalendar", reason="test-only parser")
         srv, port = smtp
-        blob = ics.invite("inv-9@byteversed.test", "Q3 payroll review",
+        blob = ics.invite("inv-9@corp.test", "Q3 payroll review",
                           "https://login.example.test/auth?t=abc",
                           organizer="it@corp.test",
-                          attendees=[("ravi@corp.test", "Ravi Kumar")])
+                          attendees=[("ravi@corp.test", "Ravi Nair")])
         send_smtp("127.0.0.1", port, "it@corp.test", "", "Invitation",
                   "<p>See attached</p>", "ravi@corp.test", html=True,
                   attachments=[("invite.ics", blob, "text/calendar")])

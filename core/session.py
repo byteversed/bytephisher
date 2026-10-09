@@ -84,6 +84,20 @@ def add_oauth(rec, tokens, provider="", client_id="", scopes=None, source="devic
     block["tenant"] = tenant or block.get("tenant", "")
     block["issuer"] = issuer or block.get("issuer", "")
     block["source"] = source
+    # DEFECT: the token set only ever landed in rec["oauth"], but every consumer of a
+    # captured token - tokenintel, tier0, dbsc, the chain pre-flight and the CLI
+    # (--tier0 / --replayability / --token-keepalive / --federation-set) - reads
+    # rec["tokens"]. So a full refresh token captured by the OAuth relay or a
+    # device-code grant was invisible to the token tier and reported as "no token to
+    # judge", contradicting tokenintel's own docstring. Mirror the fields every
+    # consumer reads into rec["tokens"]: one shape, one place.
+    bucket = rec.setdefault("tokens", {})
+    if not isinstance(bucket, dict):
+        bucket = {}
+        rec["tokens"] = bucket
+    for k, v in got.items():
+        if v:
+            bucket[k] = v
     # the granted scope comes back inside the token answer as a space-separated string
     derived = [x for x in str(got.get("scope") or "").split() if x]
     block["scopes"] = list(scopes) if scopes else (derived or block.get("scopes", []))
@@ -743,7 +757,7 @@ def evidence_from_task(rec, result, outdir=""):
     """Turn one task result into evidence.
 
     Extracted values and files are artefacts. Nothing at all means the task is recorded
-    as unproven with its error count - the honest reading of "it ran and we got nothing".
+    as unproven with its error count - the correct reading of "it ran and we got nothing".
     """
     result = result if isinstance(result, dict) else {}
     task = result.get("task", "task")
@@ -841,8 +855,14 @@ def _run_task_in(browser, rec, task_def, home, outdir, result, replay, vars_=Non
         browser.close()
     result["finished"] = time.time()
     result["duration"] = round(result["finished"] - result["started"], 1)
-    with open(os.path.join(outdir, "result.json"), "w", encoding="utf-8") as f:
+    # DEFECT: result.json was written in place, so open("w") truncated the previous run's
+    # evidence before a byte of the new one was written and a crash mid-write left a
+    # half file. Write a sibling temp file and os.replace() it (atomic on POSIX).
+    dest = os.path.join(outdir, "result.json")
+    tmp = dest + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, default=str)
+    os.replace(tmp, dest)
     rec.setdefault("takeovers", []).append(
         {"ts": time.time(), "task": result["task"], "steps": len(result["steps"]),
          "errors": len(result["errors"]), "outdir": outdir})

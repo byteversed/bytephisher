@@ -64,10 +64,11 @@ def add_domain(access_token, domain, post=None, timeout=15):
     """Add a domain to the tenant (step 1)."""
     if not access_token:
         raise FederationError("adding a domain needs an access token")
-    if not str(domain or "").strip():
-        raise FederationError("no domain to add")
+    # DEFECT: this call put the raw domain into the request body without the hostname check the
+    # other three calls apply, so a malformed value reached the tenant. Validate it here too.
+    domain = _validate_domain(domain)
     return _graph("POST", f"{GRAPH}/domains", access_token,
-                  {"id": str(domain)}, post=post, timeout=timeout)
+                  {"id": domain}, post=post, timeout=timeout)
 
 
 def verify_domain(access_token, domain, post=None, timeout=15):
@@ -118,6 +119,14 @@ _DOMAIN_RE = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
                         r"(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)+$")
 
 
+def _validate_domain(domain):
+    """A domain name (hostname), or a refusal. Shared by every call that takes one."""
+    text = str(domain or "").strip()
+    if not _DOMAIN_RE.match(text):
+        raise FederationError(f"not a domain name: {domain!r}")
+    return text
+
+
 def domain_path(domain):
     """A validated, percent-encoded domain for a Graph URL.
 
@@ -125,10 +134,7 @@ def domain_path(domain):
     so a value from a target could point the call at a DIFFERENT Graph endpoint. A domain name
     is a hostname: anything else is refused rather than encoded and hoped for.
     """
-    text = str(domain or "").strip()
-    if not _DOMAIN_RE.match(text):
-        raise FederationError(f"not a domain name: {domain!r}")
-    return quote(text, safe="")
+    return quote(_validate_domain(domain), safe="")
 
 
 def _graph(method, url, access_token, payload, post=None, timeout=15):

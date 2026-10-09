@@ -17,6 +17,12 @@ __all__ = ["CLIENTS", "TARGET_SCOPES", "FociError", "swap", "chain", "plan", "de
 
 # The first-party client ids that share a refresh-token family (documented by Microsoft as
 # FOCI: Azure CLI, Office, Teams, OneDrive, Outlook, Graph PowerShell, Portal, ...).
+#
+# DEFECT: an "excel" entry carried a fabricated GUID (c7f0e3d6-...-1b1a1e1a1e1a). It is not in
+# the published FOCI research set (secureworks/family-of-client-ids-research known-foci-clients
+# .csv, which lists the five entries below plus the two PowerShell/Portal ids used here), and a
+# wrong client id in a FOCI walk either exchanges against nothing or against the wrong app, so
+# it is removed rather than guessed. Every id kept here is one that can be checked.
 CLIENTS = {
     "azure-cli": "04b07795-8ddb-461a-bbee-02f9e1bf7b46",
     "office": "d3590ed6-52b3-4102-aeff-aad2292ab01c",
@@ -25,7 +31,6 @@ CLIENTS = {
     "outlook-mobile": "27922004-5251-4030-b22d-91ecd9a37ea4",
     "graph-powershell": "14d82eec-204b-4c2f-b7e8-296a70dab67e",
     "portal": "c44b4083-3bb0-49c1-b47d-974e53cbdf3c",
-    "excel": "c7f0e3d6-1a1e-4d3f-8a7e-1b1a1e1a1e1a",
 }
 
 # The scopes worth exchanging towards, most valuable first.
@@ -54,7 +59,15 @@ def swap(refresh_token, client_id, scope="", issuer="", tenant="common", post=No
         raise FociError("no refresh token to exchange")
     if not client_id:
         raise FociError("no client id to exchange with")
-    url = issuer or f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
+    if issuer:
+        url = issuer
+    else:
+        from core.oauth import tenant_is_safe
+        tenant = tenant or "common"
+        # DEFECT (URL/path injection): the tenant went straight into the token URL.
+        if not tenant_is_safe(tenant):
+            raise FociError(f"tenant {tenant!r} is not a safe host segment")
+        url = f"https://login.microsoftonline.com/{tenant}/oauth2/v2.0/token"
     data = {"grant_type": "refresh_token", "refresh_token": refresh_token,
             "client_id": client_id}
     if scope:

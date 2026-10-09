@@ -160,10 +160,13 @@ class TestTheStaticChallenge:
     def test_our_own_routes_are_never_challenged(self):
         s = _Static()
         try:
-            for path in ("/__bh/intel.js", "/__bh/live", "/health", "/px.gif"):
+            # /__bh/live is POST-only, so a GET is a 405 there; the rest answer 200.
+            expected = {"/__bh/intel.js": (200,), "/__bh/live": (200, 405),
+                        "/health": (200,), "/px.gif": (200,)}
+            for path, wanted in expected.items():
                 status, _h, body = s.request(path)
                 assert "Checking your browser" not in body, path
-                assert status in (200, 204, 405), (path, status)
+                assert status in wanted, (path, status)
         finally:
             s.close()
 

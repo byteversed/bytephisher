@@ -7,7 +7,7 @@ sit in front of a PKI that will issue a certificate for anyone. That is the diff
 "we have a mailbox" and "we own the tenant", and it is decided by the identity's rights - which
 are visible in the token.
 
-This module answers that question for the six paths that matter, with the honest verdict for
+This module answers that question for the six paths that matter, with the verdict for
 each: `open` (the rights are visible in the token), `needs_a_call` (the rights look present
 but a live check decides), `blocked` (a control the operator cannot see from outside), or
 `not_reachable_from_a_session` (the path needs something a token cannot give: a CA private

@@ -10,7 +10,7 @@ PKCE is not optional here: a public client without a secret must prove it starte
 and the challenge is bound to our session so a code that arrives with someone else's state
 is refused rather than exchanged.
 
-Honest limits, stated where they matter: the consent screen is visible to the victim, an
+Limits, stated where they matter: the consent screen is visible to the victim, an
 admin-restricted tenant refuses the app outright, and a code is single-use with a short
 lifetime - all three are reported, not hidden.
 """
@@ -18,6 +18,7 @@ import base64
 import hashlib
 import json
 import logging
+import re
 import secrets
 import threading
 import time
@@ -27,7 +28,7 @@ import urllib.request
 from core import net
 
 __all__ = ["OauthError", "OauthSpec", "OauthFlow", "OauthManager", "pkce_pair",
-           "parse_redirect", "PROVIDERS"]
+           "parse_redirect", "PROVIDERS", "tenant_is_safe"]
 
 PROVIDERS = {
     "microsoft": {
@@ -65,6 +66,24 @@ PROVIDERS = {
 
 class OauthError(RuntimeError):
     """A refusal that the CLI can report verbatim."""
+
+
+# Characters that let a tenant escape the single path/subdomain segment it is substituted into.
+_TENANT_UNSAFE = re.compile(r"[/\\@?#\s]")
+
+
+def tenant_is_safe(tenant):
+    """Is this tenant id safe to embed in a provider URL?
+
+    A tenant from a target (or a fat-fingered flag) such as `../../applications` interpolated
+    into `https://login.microsoftonline.com/{tenant}/v2.0` sent the authorize and token calls
+    to a DIFFERENT Graph path - a URL/path injection. A tenant is a GUID, a verified domain
+    name or an alias (`common`, `organizations`, `consumers`); anything carrying a path
+    separator, a userinfo `@`, a query/fragment marker or whitespace is refused. Only the
+    `custom` provider is exempt, because there the tenant IS the base URL.
+    """
+    text = str(tenant or "").strip()
+    return bool(text) and ".." not in text and not _TENANT_UNSAFE.search(text)
 
 
 def pkce_pair():
@@ -110,6 +129,13 @@ class OauthSpec:
         self.provider = provider
         self.client_id = client_id
         self.tenant = tenant if tenant is not None else conf.get("tenant", "")
+        # DEFECT (URL/path injection): a tenant was interpolated straight into the issuer URL,
+        # so a value from a target could point the call at a different path on the provider.
+        if provider != "custom" and self.tenant and not tenant_is_safe(self.tenant):
+            raise OauthError(
+                f"tenant {self.tenant!r} is not a safe host segment for provider {provider!r}: "
+                f"it is substituted into the issuer URL and must not contain '/', '\\', '@', "
+                f"'?', '#' or whitespace")
         self.issuer = (issuer or conf["issuer"]).format(tenant=self.tenant).rstrip("/")
         if not self.issuer or "://" not in self.issuer:
             raise OauthError(f"provider {provider!r} needs an issuer URL"

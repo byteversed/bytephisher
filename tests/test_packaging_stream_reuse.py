@@ -1,7 +1,10 @@
-"""BytePhisher gap-closure tests: pip packaging, SSE stream, update check,
-credential reuse.
+"""Packaging, the live dashboard stream, and credential reuse.
 
-Run:  ./.venv/bin/python -m pytest tests/test_gaps.py -v
+The three corners a release depends on: the package installs and imports as a library,
+the dashboard pushes a capture as it lands, and repeated credentials are detected across
+campaigns.
+
+Run:  ./.venv/bin/python -m pytest tests/test_packaging_stream_reuse.py -v
 """
 import json
 import os
@@ -151,7 +154,6 @@ class TestSSEStream:
         assert "es.onerror" in html and "setInterval(fill" in html   # fallback path
 
 
-# ========================================================== update check =====
 # ======================================================= credential reuse ====
 class TestCredentialReuse:
     @pytest.fixture()

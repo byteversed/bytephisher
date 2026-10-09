@@ -13,6 +13,10 @@ import os
 __all__ = ["PRETEXTS", "names", "get", "render", "missing_fields", "second_ask",
            "load_dir", "describe"]
 
+# Every key a pretext must carry for the accessors to work without a KeyError.
+REQUIRED_PRETEXT_FIELDS = ("roles", "locales", "subject", "body", "fields",
+                           "second_ask", "tell")
+
 # Each entry: roles it fits, locales it is written for, the subject, the body, the fields it
 # needs, the follow-up script, and the tell that makes it credible.
 PRETEXTS = {
@@ -131,8 +135,12 @@ def get(name):
 
 
 def _sub(text, context):
+    # Defect: a non-dict context (a list, a string) raised AttributeError on
+    # .items(); a caller that passed the wrong shape crashed mid-render.
+    if not isinstance(context, dict):
+        context = {}
     out = str(text or "")
-    for k, v in (context or {}).items():
+    for k, v in context.items():
         out = out.replace("{{" + k + "}}", str(v))
     return out
 
@@ -140,7 +148,7 @@ def _sub(text, context):
 def render(name, context):
     """(subject, body) with the context substituted."""
     p = get(name)
-    return _sub(p["subject"], context), _sub(p["body"], context)
+    return _sub(p.get("subject", ""), context), _sub(p.get("body", ""), context)
 
 
 def missing_fields(name, context):
@@ -150,19 +158,25 @@ def missing_fields(name, context):
     common way a campaign looks fake.
     """
     p = get(name)
-    have = {k for k, v in (context or {}).items() if str(v or "").strip()}
-    return [f for f in p["fields"] if f not in have]
+    # Defect: p["fields"] raised KeyError for a pretext that loaded without a
+    # fields list (a hand-written override); a missing key is not a crash.
+    if not isinstance(context, dict):
+        context = {}
+    have = {k for k, v in context.items() if str(v or "").strip()}
+    return [f for f in (p.get("fields") or []) if f not in have]
 
 
 def second_ask(name, context=None):
     """The follow-up message for a target who did not act."""
-    return _sub(get(name)["second_ask"], context or {})
+    # Defect: p["second_ask"] raised KeyError on a partial pretext.
+    return _sub(get(name).get("second_ask", ""), context or {})
 
 
 def describe(name):
     p = get(name)
-    return (f"{name}: roles {', '.join(p['roles'])} | locales {', '.join(p['locales'])} | "
-            f"fields {', '.join(p['fields'])} | tell: {p['tell']}")
+    return (f"{name}: roles {', '.join(p.get('roles') or [])} | "
+            f"locales {', '.join(p.get('locales') or [])} | "
+            f"fields {', '.join(p.get('fields') or [])} | tell: {p.get('tell') or '-'}")
 
 
 def load_dir(path):
@@ -192,7 +206,28 @@ def load_dir(path):
             if not isinstance(data, dict):
                 continue
             for key, value in data.items():
-                if isinstance(value, dict) and value.get("subject") and value.get("body"):
-                    PRETEXTS[str(key)] = value
-                    loaded.append(str(key))
+                if not isinstance(value, dict):
+                    continue
+                name = str(key)
+                base = PRETEXTS.get(name)
+                if base is not None:
+                    # a partial override of a built-in is merged over it, so the
+                    # accessors (missing_fields/second_ask/describe) never meet a
+                    # missing key
+                    merged = dict(base)
+                    merged.update(value)
+                    PRETEXTS[name] = merged
+                    loaded.append(name)
+                    continue
+                # Defect: any dict with subject+body loaded as a pretext, so a
+                # new entry missing 'fields'/'second_ask'/'tell' made
+                # missing_fields/second_ask/describe raise KeyError later, in
+                # the middle of an engagement. Refuse what cannot be validated.
+                missing = [k for k in REQUIRED_PRETEXT_FIELDS if not value.get(k)]
+                if missing:
+                    print(f"[pretexts] skipped {os.path.basename(path_)}:{name}: "
+                          f"missing {', '.join(missing)}")
+                    continue
+                PRETEXTS[name] = value
+                loaded.append(name)
     return loaded

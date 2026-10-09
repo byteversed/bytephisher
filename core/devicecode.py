@@ -9,7 +9,7 @@ victim approves, the provider hands the attacker's client the tokens over its ow
 fingerprint, and MFA is satisfied by the victim on the genuine site; a passkey works
 too, because the ceremony happens where it is supposed to.
 
-Two honest limits, stated up front because they decide whether it works at all:
+Two limits, stated up front because they decide whether it works at all:
 
 * the tenant must allow the device-code grant for the client id you use. Microsoft
   365 tenants increasingly block it, or require a compliant device via conditional

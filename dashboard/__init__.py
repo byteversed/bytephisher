@@ -241,8 +241,26 @@ if (window.EventSource){
             data["blocked"] = {"total_blocked": 0, "by_reason": []}
         return jsonify(data)
 
+    # app.run() in a daemon thread hides a bind failure (port in use) inside the
+    # thread, so the caller printed a URL for a dead port and the operator
+    # believed a credential-serving dashboard was up. Poll until the socket
+    # actually accepts a connection, or raise so the caller reports the failure.
     th = threading.Thread(target=app.run,
-                           kwargs={"host": host, "port": port, "debug": False, "use_reloader": False},
+                           kwargs={"host": host, "port": port, "debug": False,
+                                   "use_reloader": False},
                            daemon=True)
     th.start()
+    import socket
+    probe_host = "127.0.0.1" if host in ("", "0.0.0.0", "::") else host
+    deadline = time.time() + 5.0
+    while time.time() < deadline:
+        if not th.is_alive():
+            raise RuntimeError(f"dashboard thread died (port {port} in use?)")
+        try:
+            with socket.create_connection((probe_host, port), timeout=0.5):
+                break
+        except OSError:
+            time.sleep(0.1)
+    else:
+        raise RuntimeError(f"dashboard did not bind on {host}:{port} within 5s")
     return app, th

@@ -102,9 +102,20 @@ class TestTextHunt:
 class TestTheWrites:
 
     def test_the_rbcd_descriptor_is_a_single_ace_dacl(self):
+        """The descriptor's length follows from the SID it grants, not from a constant.
+
+        This fixture grants S-1-5-21-1-2-3-1105, which has FIVE sub-authorities and is
+        therefore 28 bytes: 20-byte SD header + 8-byte DACL header (AclRevision 4, AceCount 1)
+        + one ACE (2 type/flags + 2 AceSize + 4 mask + 28 SID) = 64. The test used to pin 58,
+        which is only right for a 4-sub-authority SID, so it asserted a wrong total rather
+        than the layout; the descriptor itself is parsed by impacket's ldaptypes in
+        tests/test_wire_crosscheck.py, which is the check that matters.
+        """
+        from core.goldenticket import _sid_bytes
+        sid = _sid_bytes("S-1-5-21-1-2-3-1105")
         sd = H.rbcd_value("S-1-5-21-1-2-3-1105")
         assert sd[:4] == b"\x01\x00\x04\x80", "revision, control with a DACL"
-        assert len(sd) == 58, "20-byte header + 8-byte DACL header + 30-byte ACE"
+        assert len(sd) == 20 + 8 + (2 + 2 + 4 + len(sid)), "SD header + DACL header + one ACE"
         assert b"\x05\x15" in sd, "the SID revision and sub-authority count are in there"
 
     def test_setting_rbcd_uses_a_replace_and_clearing_uses_a_delete(self):

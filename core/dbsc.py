@@ -87,8 +87,21 @@ def replayability(tokens, device_token="", ja3="", ip="", now=None):
 
     has_access = bool((tokens or {}).get("access_token"))
     has_refresh = bool((tokens or {}).get("refresh_token"))
+    # DEFECT: `float(claims.get("exp"))` raised on any token whose exp was not a plain number
+    # (a hostile/opaque token with exp="x" or exp=[1] took the whole identity tier down with an
+    # uncaught ValueError/TypeError). Coerce defensively and treat an unreadable exp as "no
+    # expiry claim", never as a crash.
     exp = claims.get("exp")
-    expired = bool(exp) and float(exp) < now
+    exp_value = None
+    if exp is not None and exp != "":
+        try:
+            exp_value = float(exp)
+        except (TypeError, ValueError):
+            reasons.append(f"the exp claim is not a number ({type(exp).__name__}): ignored")
+    # RFC 7519: the token is valid only while now < exp, so exp == now is already expired
+    # (the old `< now` called a token at its exact expiry still valid - an off-by-one that
+    # disagreed with core.session.oauth_valid, which uses `now >= exp`).
+    expired = exp_value is not None and exp_value <= now
     if expired:
         reasons.append("the access token is already expired")
 

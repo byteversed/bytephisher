@@ -1,6 +1,6 @@
 """Live-session operations tests: credential validation and keep-alive.
 
-Both operations are judged on honesty: a wrong password must come back REJECTED,
+Both operations are judged on behaviour: a wrong password must come back REJECTED,
 an ambiguous page must come back UNKNOWN (never CONFIRMED), and keep-alive must
 stop when the site starts bouncing us to a login page instead of pretending the
 session is still good.

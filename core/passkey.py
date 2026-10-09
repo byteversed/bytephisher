@@ -1,5 +1,5 @@
 # ============================================================================
-"""Passkeys: what a captured session can do about them, honestly.
+"""Passkeys: what a captured session can do about them.
 
 Two different problems, and they are not the same size.
 

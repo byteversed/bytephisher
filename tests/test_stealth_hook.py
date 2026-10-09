@@ -56,12 +56,19 @@ def run_hook(source, timeout=60):
     return out
 
 
+@pytest.fixture(scope="module")
+def on():
+    """The hook with stealth enabled, rendered once for the module.
+
+    Module scope because the node harness is the slow part and these assertions only read
+    its report. A class-scoped fixture defined as an instance method is deprecated in
+    pytest 8.4 (it warns on every run), and this one does not need the class.
+    """
+    return run_hook(hook_js(stealth=True))
+
+
 @pytest.mark.skipif(NODE is None, reason="node is not installed")
 class TestTheStealthHook:
-
-    @pytest.fixture(scope="class")
-    def on(self):
-        return run_hook(hook_js(stealth=True))
 
     def test_fetch_reports_itself_as_a_native(self, on):
         assert NATIVE_FETCH.match(on["fetch_to_string"]), on["fetch_to_string"]
@@ -115,7 +122,7 @@ class TestTheDifferenceStealthMakes:
         off = run_hook(hook_js(stealth=False))
         assert "[native code]" not in off["fetch_to_string"], off["fetch_to_string"]
         assert "input" in off["fetch_to_string"] or "function" in off["fetch_to_string"]
-        # the untouched native toString is naturally "native", so the honest signal is
+        # the untouched native toString is naturally "native", so the reliable signal is
         # that no shim was installed at all
         assert off["toString_replaced"] is False
         # and it still captures, so the comparison is about stealth alone

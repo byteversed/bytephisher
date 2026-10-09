@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the complete BytePhisher test suite and print one honest summary.
+"""Run the complete BytePhisher test suite and print one summary.
 
     ./.venv/bin/python tests/run_all.py            # everything
     ./.venv/bin/python tests/run_all.py --fast     # skip live/internet tests
@@ -39,15 +39,20 @@ def discover_suites():
 def _kind(path):
     """'pytest' for a test module, 'script' for a standalone self-test.
 
-    test_e2e.py runs itself and defines no pytest tests, so forcing it through
-    pytest reported "no tests ran" (and the suite was lost).
+    test_e2e.py runs itself, defines no pytest tests and carries a __main__ block; it also
+    imports pytest to declare its tier, so keying on `import pytest` alone misclassified it
+    and the suite reported the module as a failure ("no tests ran", exit 5).
     """
     try:
         with open(path, encoding="utf-8") as f:
             body = f.read()
     except OSError:
         return "pytest"
-    return "pytest" if re.search(r"^def test_|^class Test|import pytest", body, re.M) else "script"
+    if re.search(r"^def test_|^class Test", body, re.M):
+        return "pytest"
+    if re.search(r'^if __name__ == ["\']__main__["\']', body, re.M):
+        return "script"
+    return "pytest"
 
 
 def _load_descriptions():
@@ -103,11 +108,12 @@ def main():
         n_pass = counts.get("passed", 0)
         n_skip = counts.get("skipped", 0)
         n_fail = counts.get("failed", 0) + counts.get("error", 0)
-        # a suite whose tests all SKIPPED is not a failure: in CI there is no
-        # browser, so the browser-driven suites skip for a stated reason
-        # pytest exits 5 when nothing was collected, which is what a
-        # module-level skip produces (no browser in CI): that is a SKIP, not a
-        # failure, but "collected nothing at all" is still a failure.
+        # A suite whose tests all SKIPPED is not a failure: in CI there is no browser, so
+        # the browser-driven suites report "N skipped" at exit code 0, which the branch
+        # below classifies as SKIP.
+        # Exit code 5 means pytest collected NOTHING at all - a suite that silently stopped
+        # collecting (a broken import, a filter that matched nothing). That is a failure: a
+        # suite which runs no tests must not read as green.
         if n_fail:
             state = "FAIL"
         elif n_pass == 0 and n_skip:
@@ -119,7 +125,8 @@ def main():
         else:
             state = "PASS"
         results.append({
-            "suite": name, "returncode": p.returncode, "counts": counts,
+            "suite": name, "file": os.path.join("tests", cmd),
+            "returncode": p.returncode, "counts": counts,
             "seconds": round(time.time() - t0, 1), "ok": state == "PASS",
             "state": state, "tail": tail,
         })
@@ -130,6 +137,7 @@ def main():
     print("BYTEPHISHER TEST SUMMARY")
     print("=" * 72)
     total_pass = total_fail = total_skip = 0
+    failed_files = []
     for r in results:
         if r.get("skipped"):
             print(f"  {r['suite']:<14} SKIPPED ({r['reason']})")
@@ -137,12 +145,23 @@ def main():
             continue
         c = r["counts"]
         p_, f_, s_ = c.get("passed", 0), c.get("failed", 0) + c.get("error", 0) + c.get("errors", 0), c.get("skipped", 0)
+        state = r.get("state") or ("PASS" if r["ok"] else "FAIL")
+        # A suite that failed without printing a pytest count (a standalone
+        # script like test_e2e.py, or a collection crash) is still one failure:
+        # without this the run printed FAIL for the file but exited 0, so CI
+        # stayed green on a broken suite.
+        if state == "FAIL" and not f_:
+            f_ = 1
         total_pass += p_
         total_fail += f_
         total_skip += s_
-        print(f"  {r['suite']:<14} {r.get('state') or ('PASS' if r['ok'] else 'FAIL'):<6} "
+        if state == "FAIL":
+            failed_files.append(r.get("file") or r["suite"])
+        print(f"  {r['suite']:<14} {state:<6} "
               f"{p_:>3} passed  {f_} failed  {s_} skipped   ({r['seconds']}s)")
     print("-" * 72)
+    if failed_files:
+        print("  FAILED: " + ", ".join(failed_files))
     print(f"  TOTAL  {total_pass} passed, {total_fail} failed, {total_skip} skipped "
           f"in {round(time.time() - t_all, 1)}s")
     print("=" * 72)

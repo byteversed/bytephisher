@@ -132,9 +132,11 @@ class TestTheScoring:
         assert ok is True
 
     def test_junk_input_does_not_crash(self):
+        """Junk is not a human: the decision is a refusal with a bounded score."""
         for junk in (None, [], "x", {}, {"interactions": "abc"}):
             ok, score, _r = score_signals(junk)
-            assert isinstance(ok, bool) and isinstance(score, int)
+            assert ok is False, junk
+            assert isinstance(score, int) and 0 <= score <= 100, (junk, score)
 
 
 class TestTheInterstitial:

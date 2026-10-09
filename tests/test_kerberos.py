@@ -1,7 +1,7 @@
 """Kerberos roasting: the request builders, the reply parser, and the crackable formats.
 
 The parser is verified against replies this module builds (a real capture is not something a
-test can fabricate honestly), and the two encodings an enc-part can arrive in are both covered:
+test can fabricate), and the two encodings an enc-part can arrive in are both covered:
 the implicit primitive a real KDC emits, and the explicit wrapper some encoders produce.
 """
 import os
@@ -40,7 +40,14 @@ def tgs_rep(etype=23, cipher=bytes(range(64)), realm="CONTOSO.TEST"):
 
 
 def krb_error(code=24, text="Need preauth"):
-    fields = (K._tlv(0xA6, K._int(code)) + K._tlv(0xA9, K._tlv(0x1B, text.encode())))
+    """A wire-shaped KRB-ERROR: [APPLICATION 30], error-code [6], e-text [11].
+
+    The tag layout is impacket's own KRB_ERROR schema (read from the installed package,
+    impacket 0.13.1): error-code [6], crealm [7], cname [8], realm [9], sname [10],
+    e-text [11], e-data [12]. This fixture used to put the text at [9], which is the REALM,
+    so the parser correctly reported an empty e-text and the failure looked like a parser bug.
+    """
+    fields = (K._tlv(0xA6, K._int(code)) + K._tlv(0xAB, K._tlv(0x1B, text.encode())))
     return K._tlv(0x7E, fields)
 
 
@@ -58,7 +65,12 @@ class TestTheRequests:
         req = K.as_req("CONTOSO.TEST", "alice", nonce=1)
         assert req[0] == 0x6A, "the AS-REQ is [APPLICATION 10]"
         assert b"CONTOSO.TEST" in req and b"alice" in req
-        assert b"\x03\x06\x00" in req, "a BIT STRING with a zero unused-bit count"
+        # impacket's encoder emits `03 05 00 <4-byte KDCOptions word>` for the same field
+        # (checked against the installed package, impacket 0.13.1): a BIT STRING whose first
+        # content octet is the unused-bit count, followed by the four option octets.
+        # `03 06 00` (a five-octet word) was the pre-fix encoding and shifted every option bit
+        # by 8, so this assertion used to pin the bug rather than the format.
+        assert b"\x03\x05\x00\x40\x81\x00\x10" in req, "the 4-byte KDCOptions BIT STRING"
 
     def test_a_tgs_req_names_the_spn(self):
         req = K.tgs_req("CONTOSO.TEST", "alice", "MSSQLSvc/sql.contoso.test:1433")

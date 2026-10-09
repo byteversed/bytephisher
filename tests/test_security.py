@@ -702,8 +702,10 @@ class TestAuditBatchA:
                 r.read()
                 status = r.status
                 conn.close()
-                assert status in (200, 400, 413), status
-                # the point is that it answered without waiting for EOF
+                # A negative Content-Length is refused (400) or rejected as oversized
+                # (413); 200 would mean the route read a body it was never given.
+                assert status in (400, 413), status
+                # and it answered at all, i.e. it did not wait for an EOF that never comes
             finally:
                 httpd.shutdown()
         finally:

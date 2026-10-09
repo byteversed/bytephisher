@@ -115,6 +115,13 @@ def fetch(host="", user="", password="", folder="INBOX", limit=50, search="UNSEE
                 continue
             msg = email.message_from_bytes(raw[0][1])
             out.append(_as_dict(msg))
+    except InboxError:
+        raise
+    except Exception as e:
+        # imaplib raises its own `IMAP4.error`/`abort` (not an OSError), which the CLI
+        # does not catch - a folder that cannot be selected or a mid-read drop reached
+        # the operator as a traceback instead of one line. Surface it as InboxError.
+        raise InboxError(f"IMAP read failed: {type(e).__name__}: {e}") from e
     finally:
         with contextlib.suppress(Exception):
             client.logout()
@@ -122,15 +129,22 @@ def fetch(host="", user="", password="", folder="INBOX", limit=50, search="UNSEE
 
 
 def _connect(host, user, password, timeout):
-    try:
-        client = imaplib.IMAP4_SSL(host, timeout=timeout)
-    except Exception:
-        client = imaplib.IMAP4(host, timeout=timeout)
-    try:
-        client.login(user, password)
-    except Exception as e:
-        raise InboxError(f"IMAP login failed: {type(e).__name__}: {e}") from e
-    return client
+    last = None
+    for factory in (imaplib.IMAP4_SSL, imaplib.IMAP4):
+        try:
+            client = factory(host, timeout=timeout)
+        except Exception as e:
+            last = e
+            continue
+        try:
+            client.login(user, password)
+        except Exception as e:
+            raise InboxError(f"IMAP login failed: {type(e).__name__}: {e}") from e
+        return client
+    # both the TLS and the plaintext attempt failed to connect: report it as a clean
+    # InboxError rather than leaking the raw socket exception
+    raise InboxError(f"IMAP connect to {host} failed: "
+                     f"{type(last).__name__}: {last}") from last
 
 
 def _as_dict(msg):
@@ -151,7 +165,7 @@ def _as_dict(msg):
 
 
 def suggest(reply_class, pretext=None, locale="en"):
-    """The follow-up the pretext already scripts, or the honest 'do not send'."""
+    """The follow-up the pretext already scripts, or the 'do not send' verdict."""
     if reply_class == "refused":
         return {"send": False, "why": "the target refused: a second message confirms the "
                                       "campaign and turns a refusal into a report"}

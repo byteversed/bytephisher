@@ -1,4 +1,4 @@
-"""The pure-Python AES: verified against the published vectors, and honest about what is not.
+"""The pure-Python AES: verified against the published vectors, and states what is not covered.
 
 FIPS-197 (three key sizes, encrypt AND decrypt) and NIST SP 800-38A (CBC, CTR) are the tests
 that matter: a cipher that is not checked against a published vector silently produces garbage,

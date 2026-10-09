@@ -12,6 +12,7 @@ Output is a matrix (list of rows of 0/1) plus `svg()`, `png()` and `ascii_art()`
 The PNG writer is zlib + struct, so a QR can be attached to a mail or written to a file
 without an imaging dependency.
 """
+import html
 import struct
 import zlib
 
@@ -447,10 +448,14 @@ def svg(matrix, scale=4, border=4, dark="#000000", light="#ffffff"):
             if v:
                 rects.append(f'<rect x="{(c + border) * scale}" y="{(r + border) * scale}" '
                              f'width="{scale}" height="{scale}"/>')
+    # the colours land inside attribute values: escape them so a hostile value
+    # cannot close the attribute and inject markup into the SVG
+    dark_attr = html.escape(str(dark), quote=True)
+    light_attr = html.escape(str(light), quote=True)
     return ('<svg xmlns="http://www.w3.org/2000/svg" version="1.1" '
             f'width="{side}" height="{side}" viewBox="0 0 {side} {side}">'
-            f'<rect width="{side}" height="{side}" fill="{light}"/>'
-            f'<g fill="{dark}">' + "".join(rects) + "</g></svg>")
+            f'<rect width="{side}" height="{side}" fill="{light_attr}"/>'
+            f'<g fill="{dark_attr}">' + "".join(rects) + "</g></svg>")
 
 
 def _png_chunk(kind, data):

@@ -54,6 +54,17 @@ def _iso(ts):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(ts)))
 
 
+def _esc(text):
+    """XML-escape a value that lands inside an attribute or element text.
+
+    `assertion()` escaped its fields; `response()` interpolated the issuer, the destination
+    and InResponseTo raw, so a hostile issuer/destination (or an operator's typo) injected
+    markup into the envelope. Both now escape.
+    """
+    return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace('"', "&quot;"))
+
+
 def assertion(issuer, audience, subject, not_before=None, not_after=None, attributes=None,
               name_id_format="urn:oasis:names:tc:SAML:1.1:nameid-format:unspecified",
               in_response_to="", assertion_id="", session_index="", authn_instant=None):
@@ -75,10 +86,7 @@ def assertion(issuer, audience, subject, not_before=None, not_after=None, attrib
         raise SamlForgeError("not_after must be later than not_before")
     aid = assertion_id or f"_{uuid.uuid4()}"
     authn = float(authn_instant if authn_instant is not None else now)
-
-    def esc(text):
-        return (str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-                .replace('"', "&quot;"))
+    esc = _esc
 
     attrs = ""
     for name, value in (attributes or {}).items():
@@ -112,16 +120,21 @@ def assertion(issuer, audience, subject, not_before=None, not_after=None, attrib
 
 def response(assertion_xml, issuer, destination="", in_response_to="", status="Success",
              response_id=""):
-    """The protocol envelope the SP actually receives."""
-    rid = response_id or f"_{uuid.uuid4()}"
+    """The protocol envelope the SP actually receives.
+
+    Every value that lands in the XML is escaped: `issuer`, `destination`, `in_response_to`
+    and `response_id` come from the operator (or a target's metadata) and were interpolated
+    raw, so markup in any of them broke the envelope or injected a second element.
+    """
+    rid = _esc(response_id) if response_id else f"_{uuid.uuid4()}"
     now = time.time()
     status_code = ("urn:oasis:names:tc:SAML:2.0:status:Success" if status == "Success"
                    else "urn:oasis:names:tc:SAML:2.0:status:Requester")
     return (
         f'<samlp:Response xmlns:samlp="{PROTO_NS}" ID="{rid}" Version="2.0"'
-        f' IssueInstant="{_iso(now)}" Destination="{destination}"'
-        + (f' InResponseTo="{in_response_to}"' if in_response_to else "")
-        + f'><saml:Issuer xmlns:saml="{SAML_NS}">{issuer}</saml:Issuer>'
+        f' IssueInstant="{_iso(now)}" Destination="{_esc(destination)}"'
+        + (f' InResponseTo="{_esc(in_response_to)}"' if in_response_to else "")
+        + f'><saml:Issuer xmlns:saml="{SAML_NS}">{_esc(issuer)}</saml:Issuer>'
         + f'<samlp:Status><samlp:StatusCode Value="{status_code}"/></samlp:Status>'
         + assertion_xml + "</samlp:Response>")
 

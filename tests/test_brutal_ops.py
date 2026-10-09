@@ -22,7 +22,8 @@ from core import mfafatigue as F  # noqa: E402
 from core import relay as R  # noqa: E402
 from core import spray as S  # noqa: E402
 
-pytestmark = pytest.mark.unit
+# integration: a real relay listener on a local socket
+pytestmark = pytest.mark.integration
 
 
 def ntlm_type1():

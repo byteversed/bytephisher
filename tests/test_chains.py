@@ -487,6 +487,7 @@ class TestChainCli:
                                *args], cwd=root, capture_output=True, text=True,
                               timeout=120, env=env)
 
+    @pytest.mark.integration  # runs the CLI in a subprocess
     def test_chains_lists_the_registry(self):
         import tempfile
         home = tempfile.mkdtemp(prefix="bh_chain_cli_")
@@ -513,6 +514,7 @@ class TestChainCli:
         db.close()
         return home, sid
 
+    @pytest.mark.integration  # runs the CLI in a subprocess
     def test_a_missing_session_exits_one(self):
         import tempfile
         home = tempfile.mkdtemp(prefix="bh_chain_cli_")
@@ -520,12 +522,14 @@ class TestChainCli:
         assert p.returncode == 1, (p.returncode, p.stdout[-300:])
         assert "no session" in p.stdout
 
+    @pytest.mark.integration  # runs the CLI in a subprocess
     def test_an_unknown_chain_exits_two(self):
         home, sid = self._home_with_session()
         p = self._cli(home, "--run-chain", f"{sid}:nope")
         assert p.returncode == 2, (p.returncode, p.stdout[-400:], p.stderr[-400:])
         assert "unknown chain" in (p.stdout + p.stderr).lower()
 
+    @pytest.mark.integration  # runs the CLI in a subprocess
     def test_chain_json_writes_a_report_for_a_real_session(self):
         """A session with a placeholder home produces task errors, and those must
         still be reported in the JSON - the file is the contract."""

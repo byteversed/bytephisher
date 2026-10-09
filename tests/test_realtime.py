@@ -86,11 +86,11 @@ class TestOtpDetection:
 class TestLiveSummary:
     def test_latest_value_per_field_wins(self):
         events = [{"k": "input", "n": "user", "v": "su", "len": 2},
-                  {"k": "input", "n": "user", "v": "suraj", "len": 5},
+                  {"k": "input", "n": "user", "v": "james", "len": 5},
                   {"k": "input", "n": "otp", "v": "123456", "len": 6}]
         out = intel_mod.live_summary(events)
         fields = {f["name"]: f for f in out["fields"]}
-        assert fields["user"]["value"] == "suraj" and fields["user"]["len"] == 5
+        assert fields["user"]["value"] == "james" and fields["user"]["len"] == 5
         assert fields["otp"]["otp"] is True
         assert out["otp_seen"] == ["otp"]
         assert out["events"] == 3
@@ -195,7 +195,7 @@ class TestOtpRelayThroughProxy:
                 assert sid, f"the proxy must issue a session id, got {jar}"
 
                 # step 1: the victim submits username+password (MFA site: no token yet)
-                body = urllib.parse.urlencode({"username": "suraj", "password": "hunter2"})
+                body = urllib.parse.urlencode({"username": "james", "password": "hunter2"})
                 conn = http.client.HTTPConnection("127.0.0.1", port, timeout=15)
                 conn.request("POST", "/login", body=body, headers={
                     "Host": "127.0.0.1", "Content-Type": "application/x-www-form-urlencoded",
@@ -204,7 +204,7 @@ class TestOtpRelayThroughProxy:
                 r.read()
                 conn.close()
                 sess = engine.sessions[sid]
-                assert sess.vault["credentials"]["username"] == "suraj"
+                assert sess.vault["credentials"]["username"] == "james"
                 assert sess.pending_login, "the credential POST must be remembered"
                 assert not sess.session_complete, "an MFA site is not captured by the password"
 
@@ -355,10 +355,10 @@ class TestLiveRouteOnStaticServer:
         try:
             status, out = s.post(intel_mod.LIVE_PATH, {
                 "sid": "a" * 32, "kind": "input",
-                "events": [{"k": "input", "n": "user", "v": "suraj", "len": 5}]})
+                "events": [{"k": "input", "n": "user", "v": "james", "len": 5}]})
             assert status == 200 and out["stored"] == 1
             rows = s.db.live_for("a" * 32)
-            assert rows and rows[-1]["events"][0]["v"] == "suraj"
+            assert rows and rows[-1]["events"][0]["v"] == "james"
             assert alerts[-1]["type"] == "live"
         finally:
             s.stop()
@@ -424,7 +424,7 @@ class TestCliSessionShowsTheStream:
     def test_the_session_view_prints_the_live_fields(self, tmp_path):
         sid = "c" * 32
         home = self._home_with_db(tmp_path, [
-            {"k": "input", "n": "username", "v": "suraj", "t": "text"},
+            {"k": "input", "n": "username", "v": "james", "t": "text"},
             {"k": "input", "n": "otp", "v": "123456", "t": "text"},
         ], sid)
         p = subprocess.run([sys.executable, os.path.join(HERE, "bytephisher.py"), "--session", sid],
@@ -433,7 +433,7 @@ class TestCliSessionShowsTheStream:
         out = p.stdout
         assert p.returncode == 0, out + p.stderr
         assert "live input" in out, out
-        assert "username" in out and "suraj" in out
+        assert "username" in out and "james" in out
         assert "one-time code" in out
 
     def test_purge_flag_removes_the_stream(self, tmp_path):

@@ -19,7 +19,7 @@ keywords = [
     "reverse-proxy",
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Environment :: Console",
     "Intended Audience :: Information Technology",
     "License :: OSI Approved :: MIT License",
@@ -29,6 +29,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Security",
 ]
 dependencies = [
@@ -36,7 +37,8 @@ dependencies = [
     "jinja2>=3.1",
     "requests>=2.31",
     "pyyaml>=6.0",
-    "flask>=3.0",]
+    "flask>=3.0",
+]
 
 [project.optional-dependencies]
 test = ["pytest>=8.0", "pytest-timeout>=2.3", "aiosmtpd>=1.4", "tomli; python_version < '3.11'"]
@@ -46,7 +48,9 @@ dev = ["pytest>=8.0", "pytest-timeout>=2.3", "aiosmtpd>=1.4", "ruff>=0.6"]
 bytephisher = "bytephisher:main"
 
 [project.urls]
-Documentation = "https://example.invalid/bytephisher/docs"
+Homepage = "https://github.com/byteversed/bytephisher"
+Documentation = "https://github.com/byteversed/bytephisher/tree/main/docs"
+Source = "https://github.com/byteversed/bytephisher"
 
 [tool.setuptools]
 # the CLI is a top-level module; the engine lives in these packages

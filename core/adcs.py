@@ -6,7 +6,7 @@ admin" are ESC1 (a template that lets the enrollee supply the subject, so the ce
 `administrator` and the CA signs it) and ESC8 (relaying to the HTTP enrolment endpoint, which
 accepts NTLM).
 
-What a session-based tool can honestly do is the RECONNAISSANCE: is the enrolment endpoint
+What a session-based tool can do is the RECONNAISSANCE: is the enrolment endpoint
 reachable, does it offer NTLM (the ESC8 precondition), does it answer without authentication,
 and does it disclose the template list. That is what decides whether the next step is worth
 attempting, and it is all observable from a normal HTTP request.

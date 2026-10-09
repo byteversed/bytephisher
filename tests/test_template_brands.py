@@ -10,6 +10,11 @@ import os
 import re
 import sys
 
+import pytest
+
+# unit: the brand table is read and compared; nothing is served and no port is bound
+pytestmark = pytest.mark.unit
+
 # make the project importable when this file is run on its own
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if HERE not in sys.path:
@@ -63,8 +68,10 @@ def test_slugs_unique_lowercase_and_wellformed():
 # (d) no slug or name collides with the existing generator library -----------
 def test_no_collision_with_existing_generator_brands():
     from tools import gen_templates as gt
-    existing_slugs = {s[0] for s in gt.SITES}
-    existing_names = {s[1] for s in gt.SITES}
+    # BASE_SITES, not SITES: SITES is the merged result, so comparing against it
+    # would compare the batch with itself.
+    existing_slugs = {s[0] for s in gt.BASE_SITES}
+    existing_names = {s[1] for s in gt.BASE_SITES}
     for slug, name, *_rest in tb.BRANDS:
         assert slug not in existing_slugs, f"slug {slug!r} already in gen_templates.SITES"
         assert name not in existing_names, f"name {name!r} already in gen_templates.SITES"

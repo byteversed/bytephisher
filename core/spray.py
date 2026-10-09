@@ -87,11 +87,13 @@ def spray(users, passwords, submit=None, pacer=None, on_result=None, sleep=None,
     pacer = pacer or Pacer(threshold=threshold, window=window)
     _sleep = sleep or time.sleep
     rows, locked = [], []
-    for password in passwords:
+    # DEFECT: `passwords.index(password)` returned the FIRST occurrence, so a repeated password
+    # reported the wrong index (and cost O(n) per attempt). Enumerate instead.
+    for pw_index, password in enumerate(passwords):
         for user in users:
             ok, why = pacer.can_try(user)
             if not ok:
-                rows.append({"user": user, "password_index": passwords.index(password),
+                rows.append({"user": user, "password_index": pw_index,
                              "result": "skipped", "why": why})
                 continue
             try:
@@ -99,7 +101,7 @@ def spray(users, passwords, submit=None, pacer=None, on_result=None, sleep=None,
             except Exception as e:
                 result = {"error": f"{type(e).__name__}: {e}"}
             pacer.note(user, result.get("valid") and "valid" or "invalid")
-            row = {"user": user, "password_index": passwords.index(password),
+            row = {"user": user, "password_index": pw_index,
                    "result": ("valid" if result.get("valid") else
                               "locked" if result.get("locked") else
                               "mfa" if result.get("mfa") else
@@ -107,7 +109,9 @@ def spray(users, passwords, submit=None, pacer=None, on_result=None, sleep=None,
                    "detail": result.get("error", "")}
             rows.append(row)
             if on_result:
-                row["_cb"] = on_result(row)
+                # DEFECT: `row["_cb"] = on_result(row)` stored the callback's return value in
+                # the returned row, leaking an internal artifact into the spray result.
+                on_result(row)
             if row["result"] == "valid":
                 return {"rows": rows, "valid": [r for r in rows if r["result"] == "valid"],
                         "locked": locked, "pacer": pacer.summary()}

@@ -107,14 +107,18 @@ class TestTheLocalChecks:
 
     def test_dependencies_reports_what_is_missing(self):
         r = L.check_deps()
-        assert r["status"] in (L.PASS, L.FAIL)
+        assert r["name"] == "dependencies"
         if r["status"] == L.FAIL:
-            assert "pip install" in r["fix"]
+            assert "pip install" in r["fix"], r
+            assert r["detail"], "a dependency failure must name what is missing"
+        else:
+            assert r["status"] == L.PASS and not r["fix"], r
 
+    @pytest.mark.live  # the probe renders a page in a real browser
     def test_the_browser_check_answers_the_decisive_question(self):
         """Either it can reach a live host (PASS) or it must say exactly why not.
 
-        Three honest failure modes, and CI hits the first one (playwright is not
+        Three failure modes, and CI hits the first one (playwright is not
         installed there): playwright missing, cannot render, cannot reach a live host.
         """
         r = L.check_browser()

@@ -101,7 +101,12 @@ def line(record):
 
 def _fingerprint(tokens):
     import hashlib
-    blob = "|".join(f"{k}={str(tokens[k])[:64]}" for k in sorted(tokens))
+    # DEFECT: every value was truncated to 64 characters, so two different tokens that
+    # share a 64-char prefix - routine for JWTs from the same issuer, or an access token
+    # that is merely re-issued - produced the SAME fingerprint and the cached verdict was
+    # reused for changed tokens. A stale "replayable" on an already-expired token is
+    # exactly the verdict the operator must not be handed. Hash the full set instead.
+    blob = "|".join(f"{k}={tokens[k]}" for k in sorted(tokens))
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
 
 

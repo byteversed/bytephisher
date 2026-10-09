@@ -105,7 +105,9 @@ class TestAsciiInvariant:
         assert not offenders, f"non-ASCII in shipped code: {offenders}"
 
     def test_every_py_file_parses(self):
-        for p in code_files():
+        files = code_files()
+        assert len(files) >= 50, f"only {len(files)} files were parsed"
+        for p in files:
             ast.parse(open(p, encoding="utf-8").read(), filename=p)
 
     def test_argparse_help_is_ascii(self):
@@ -184,3 +186,112 @@ class TestSubcommandHelp:
         listed = subprocess.run([PY, "bytephisher.py", "--lures"], cwd=ROOT,
                                 env=env, capture_output=True, text=True, timeout=120)
         assert listed.returncode == 0 and "port-test" in listed.stdout
+
+
+class TestTheScanCoversTheWholeShippedTree:
+    """The ASCII invariant must cover the shipped code, not a hand-picked list.
+
+    The scan used to be able to hide a file two ways - a directory in SKIP_DIRS that
+    later grew shipped code, or the ``basename.startswith("test_")`` filter dropping a
+    shipped module that happens to be named like a test. These guards fail the moment a
+    shipped ``.py`` stops being scanned, instead of passing quietly.
+    """
+
+    def _shipped_py(self):
+        """Every ``.py`` outside the test tree, found independently of code_files()."""
+        out = set()
+        for root, dirs, files in os.walk(ROOT):
+            dirs[:] = [d for d in dirs if d not in {".git", ".venv", "__pycache__",
+                                                     "node_modules"}]
+            for f in files:
+                if not f.endswith(".py"):
+                    continue
+                rel = os.path.relpath(os.path.join(root, f), ROOT)
+                if rel.startswith("tests" + os.sep):
+                    continue
+                out.add(rel)
+        return out
+
+    def test_every_shipped_python_file_is_scanned(self):
+        shipped = self._shipped_py()
+        covered = {os.path.relpath(p, ROOT) for p in code_files()}
+        missing = sorted(shipped - covered)
+        assert not missing, (
+            f"shipped .py the ASCII invariant never opens: {missing} "
+            f"(add it to code_files() or to DATA_FILES with a reason)")
+
+    def test_the_entry_point_and_every_core_module_are_scanned(self):
+        covered = {os.path.relpath(p, ROOT) for p in code_files()}
+        assert "bytephisher.py" in covered, "the CLI entry point must be scanned"
+        core = {f"core/{f}" for f in os.listdir(os.path.join(ROOT, "core"))
+                if f.endswith(".py")}
+        assert core <= covered, f"core modules not scanned: {sorted(core - covered)}"
+
+
+DOCS_ROOT = os.path.join(ROOT, "docs")
+ROOT_DOCS = ("README.md", "CHANGELOG.md")
+
+
+def doc_files():
+    """Every shipped document: the two at the root plus every .md under docs/."""
+    out = [os.path.join(ROOT, name) for name in ROOT_DOCS
+           if os.path.isfile(os.path.join(ROOT, name))]
+    for root, dirs, files in os.walk(DOCS_ROOT):
+        dirs[:] = [d for d in dirs if d not in {".git", "__pycache__"}]
+        out.extend(os.path.join(root, f) for f in files if f.endswith(".md"))
+    return sorted(out)
+
+
+class TestTheDocumentsAreAscii:
+    """A document is read in an editor, a terminal and a diff on three platforms, and a
+    box-drawing character or a smart quote survives none of them intact."""
+
+    def test_the_scan_finds_the_documents(self):
+        """Guards the check below against passing because it opened nothing."""
+        found = doc_files()
+        names = {os.path.basename(p) for p in found}
+        assert "README.md" in names and "ARCHITECTURE.md" in names
+        assert len(found) >= 8, f"the document scan found only {len(found)} files"
+
+    def test_every_document_is_pure_ascii(self):
+        offenders = {}
+        for path in doc_files():
+            bad = sorted({c for c in open(path, encoding="utf-8").read() if ord(c) > 127})
+            if bad:
+                offenders[os.path.relpath(path, ROOT)] = [f"U+{ord(c):04X}" for c in bad]
+        assert not offenders, f"non-ASCII in shipped documents: {offenders}"
+
+
+class TestTheSuiteRunnerClassifiesItsFiles:
+    """run_all.py runs every tests/test_*.py. A standalone self-test defines no pytest
+    tests and carries a __main__ block, and it also imports pytest to declare its tier:
+    keying on `import pytest` alone sent it through pytest, which collected nothing and
+    reported the module as a failure."""
+
+    @staticmethod
+    def _runner():
+        import importlib.util
+        spec = importlib.util.spec_from_file_location(
+            "bp_run_all_under_test", os.path.join(ROOT, "tests", "run_all.py"))
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_the_self_test_is_a_script_and_a_module_is_a_module(self):
+        runner = self._runner()
+        assert runner._kind(os.path.join(ROOT, "tests", "test_e2e.py")) == "script"
+        assert runner._kind(os.path.join(ROOT, "tests", "test_totp.py")) == "pytest"
+
+    def test_the_rule_agrees_with_what_each_file_actually_contains(self):
+        """Every test file that defines no test function and no Test class must be a
+        script, and every file that defines one must be a module."""
+        import re
+        runner = self._runner()
+        for name in sorted(os.listdir(os.path.join(ROOT, "tests"))):
+            if not (name.startswith("test_") and name.endswith(".py")):
+                continue
+            path = os.path.join(ROOT, "tests", name)
+            body = open(path, encoding="utf-8").read()
+            defines_tests = bool(re.search(r"^def test_|^class Test", body, re.M))
+            kind = runner._kind(path)
+            assert kind == ("pytest" if defines_tests else "script"), f"{name} -> {kind}"

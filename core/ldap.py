@@ -14,7 +14,7 @@ tool refuses to take for a single feature, so this module implements the slice t
 BER encoding/decoding, a bind (simple, or NTLM through `core.relay`'s message handling), a
 search with the filters these attacks need, and a modify (for the writes an attack requires).
 
-Honest scope: it is not a full LDAP stack. No referrals, no paging beyond what a single search
+Scope: it is not a full LDAP stack. No referrals, no paging beyond what a single search
 returns, no SASL beyond the NTLM path. It is enough to ask the directory the questions the
 attacks ask, and it says so.
 """
@@ -240,36 +240,85 @@ def parse_filter(text):
             parts.append(encode(0x81, rule[-1]))
         if attr:
             parts.append(encode(0x82, attr))
-        parts.append(encode(0x83, value))
+        parts.append(encode(0x83, _unescape(value)))
         return encode(0xA9, parts)
     match = re.match(r"^([^:()=<>~]+)([=<>~]+)(.*)$", body, re.S)
     if not match:
         raise LdapError(f"cannot parse the filter {text!r}")
     attr, op, value = match.group(1), match.group(2), match.group(3)
     if op == "=":
-        if value == "*":
-            return encode(0x87, attr)
-        if "*" in value:
-            pieces = value.split("*")
-            subs = []
-            if pieces[0]:
-                subs.append(encode(0x80, pieces[0]))                # initial
-            for middle in pieces[1:-1]:
-                if middle:
-                    subs.append(encode(0x81, middle))               # any
-            if pieces[-1]:
-                subs.append(encode(0x82, pieces[-1]))               # final
-            if not subs:
-                return encode(0x87, attr)                           # "attr=*" is a presence
-            # IMPLICIT TAGS (which LDAP uses): the [4] tag REPLACES the SEQUENCE tag, so the
-            # fields go in directly. Wrapping them in a SEQUENCE makes the server answer
-            # protocolError with a diagnostic about attrs, which is not about attrs at all.
-            return encode(0xA4, [encode(0x04, attr), encode(0x30, subs)])
-        return encode(0xA3, [encode(0x04, attr), encode(0x04, value)])
+        # RFC 4515: an UNESCAPED '*' is a wildcard, but `\2a` is a literal '*'. Splitting the
+        # raw value on '*' (which the first version did) treated an escaped wildcard as a
+        # wildcard AND sent the backslash escapes literally, so `(cn=a\2ab)` asked the server
+        # for the four characters `a\2ab` instead of the three bytes `a*b` - it returns nothing.
+        pieces, wildcard = _split_wildcards(value)
+        if not wildcard:
+            return encode(0xA3, [encode(0x04, attr), encode(0x04, pieces[0])])
+        subs = []
+        if pieces[0]:
+            subs.append(encode(0x80, pieces[0]))                # initial
+        for middle in pieces[1:-1]:
+            if middle:
+                subs.append(encode(0x81, middle))               # any
+        if pieces[-1]:
+            subs.append(encode(0x82, pieces[-1]))               # final
+        if not subs:
+            return encode(0x87, attr)                           # "attr=*" is a presence
+        # IMPLICIT TAGS (which LDAP uses): the [4] tag REPLACES the SEQUENCE tag, so the
+        # fields go in directly. Wrapping them in a SEQUENCE makes the server answer
+        # protocolError with a diagnostic about attrs, which is not about attrs at all.
+        return encode(0xA4, [encode(0x04, attr), encode(0x30, subs)])
     tag = {"=": 0xA3, ">=": 0xA5, "<=": 0xA6, "~=": 0xA8}.get(op)
     if tag is None:
         raise LdapError(f"unsupported filter operator {op!r}")
-    return encode(tag, [encode(0x04, attr), encode(0x04, value)])
+    return encode(tag, [encode(0x04, attr), encode(0x04, _unescape(value))])
+
+
+_HEX_DIGITS = "0123456789abcdefABCDEF"
+
+
+def _unescape(value):
+    """RFC 4515 section 3: `\\XX` is the byte 0xXX; anything else is its own UTF-8 bytes.
+
+    A lone backslash (which RFC 4515 calls invalid) is kept literally rather than refused, so a
+    caller's slightly-off filter still asks a question instead of raising.
+    """
+    out, i, text = bytearray(), 0, str(value)
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and i + 2 < len(text) and text[i + 1] in _HEX_DIGITS \
+                and text[i + 2] in _HEX_DIGITS:
+            out.append(int(text[i + 1:i + 3], 16))
+            i += 3
+            continue
+        out.extend(ch.encode("utf-8"))
+        i += 1
+    return bytes(out)
+
+
+def _split_wildcards(value):
+    """Split a filter value on UNESCAPED '*' into byte segments.
+
+    Returns (segments, had_wildcard). `\\2a` is the literal byte 0x2a and is NOT a wildcard,
+    which is the whole point of the escaping: `(cn=a\\2ab)` must match the account whose name
+    contains a literal '*', not the substring match `a*b`.
+    """
+    segments, wildcard, i, text = [bytearray()], False, 0, str(value)
+    while i < len(text):
+        ch = text[i]
+        if ch == "\\" and i + 2 < len(text) and text[i + 1] in _HEX_DIGITS \
+                and text[i + 2] in _HEX_DIGITS:
+            segments[-1].append(int(text[i + 1:i + 3], 16))
+            i += 3
+            continue
+        if ch == "*":
+            wildcard = True
+            segments.append(bytearray())
+            i += 1
+            continue
+        segments[-1].extend(ch.encode("utf-8"))
+        i += 1
+    return [bytes(s) for s in segments], wildcard
 
 
 def _split_filter_list(text):
@@ -412,12 +461,15 @@ class LdapClient:
         """A search: returns a list of {dn, attrs}. `scope` 0=base 1=one 2=subtree."""
         mid = self._next_id()
         attr_list = [encode(0x04, a) for a in (attrs or [])]
+        # sizeLimit/timeLimit are 0..maxInt, and 0 means "no client-imposed limit" (RFC 4511
+        # 4.5.1). `int(size_limit or 1000)` collapsed an EXPLICIT 0 into 1000, so a caller asking
+        # for "no limit" silently got a 1000-entry cap; the same for a zero timeLimit.
         op = encode(0x63, [
             encode(0x04, str(base or "")),
             encode(0x0A, int(scope)),
             encode(0x0A, 0),                                   # derefAliases: never
-            encode(0x02, int(size_limit or 1000)),
-            encode(0x02, int(timeout or 15)),
+            encode(0x02, 1000 if size_limit is None else int(size_limit)),
+            encode(0x02, 15 if timeout is None else int(timeout)),
             encode(0x01, False),                               # typesOnly
             parse_filter(filter_text or "(objectClass=*)"),
             encode(0x30, attr_list),
@@ -463,6 +515,12 @@ class LdapClient:
 
     def modify(self, dn, changes, operation=2):
         """A modify: `changes` is {attr: [values]}. operation 0=add 1=delete 2=replace."""
+        # RFC 4511 defines add(0)/delete(1)/replace(2); RFC 4525 adds increment(3). An
+        # out-of-range operation used to be encoded and sent, and the server answered a
+        # protocolError the caller could not read as "you passed the wrong number".
+        if operation not in (0, 1, 2, 3):
+            raise LdapError(f"a modify operation is 0=add 1=delete 2=replace 3=increment, "
+                            f"not {operation!r}")
         mid = self._next_id()
         parts = []
         for attr, values in (changes or {}).items():
@@ -477,6 +535,21 @@ class LdapClient:
         code, _dn, msg = self._result(bodies)
         if code != 0:
             raise LdapError(f"modify refused ({code}): {msg}")
+        return True
+
+    def unbind(self):
+        """Unbind: [APPLICATION 2] NULL, then close.
+
+        RFC 4511 4.3: the server does NOT respond to an UnbindRequest, so `_send` (which waits
+        for a reply) would block forever on a real server. Write the request and close instead -
+        which is what "the client is done" looks like on the wire.
+        """
+        mid = self._next_id()
+        sock = self.open().sock
+        if sock is not None:
+            with contextlib.suppress(OSError):
+                sock.sendall(encode(0x30, [encode(0x02, mid), b"\x42\x00"]))
+        self.close()
         return True
 
     # ------------------------------------------------------------ queries --

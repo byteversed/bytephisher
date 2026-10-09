@@ -137,6 +137,7 @@ class TestTheDnsFacts:
         assert "NOT READY" in text and "spoofable" in text
 
 
+@pytest.mark.live  # one real DNS-over-HTTPS query
 class TestTheLiveResolver:
     """The resolver path itself (one real query). Skipped without network."""
 

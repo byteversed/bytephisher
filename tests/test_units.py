@@ -276,7 +276,7 @@ class TestMailer:
     def test_all_templates_render_variables(self):
         for name in mailer.TEMPLATES:
             subject, body = mailer.render(name, {
-                "To_FirstName": "Suraj", "To_Address": "s@example.com",
+                "To_FirstName": "Alex", "To_Address": "s@example.com",
                 "Phish_URL": "https://x.example.com", "From_Name": "IT",
                 "Location": "Mumbai", "Doc_Name": "d.pdf", "Invoice_ID": "INV-1"})
             assert "{{" not in subject and "{{" not in body
@@ -332,9 +332,18 @@ class TestAlerts:
         finally:
             stub.stop()
 
-    def test_notifier_survives_dead_webhook(self):
+    def test_notifier_survives_dead_webhook(self, monkeypatch):
+        """The send is attempted and its failure is absorbed, not propagated."""
+        calls = []
+
+        def boom(*_a, **_kw):
+            calls.append(1)
+            raise OSError("connection refused")
+
+        monkeypatch.setattr(alerts, "send_webhook", boom)
         n = alerts.make_notifier(webhook="http://127.0.0.1:1/dead", async_=False)
-        n({"fields": {}, "ip": "0.0.0.0"})   # must not raise
+        assert n({"fields": {}, "ip": "0.0.0.0"}) is None
+        assert calls == [1], "the notifier never reached the webhook send"
 
     def test_telegram_notifier_hits_stubbed_api(self):
         from conftest import StubHTTP
@@ -660,6 +669,7 @@ class TestCustomImport:
         assert 'action="/"' in html
         assert "ACME" in html
 
+    @pytest.mark.integration  # binds a local port and serves the imported template
     def test_imported_template_captures_credentials(self, tmp_path, monkeypatch):
         """Full loop: import -> serve -> POST -> row in SQLite."""
         import socket

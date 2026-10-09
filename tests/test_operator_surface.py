@@ -10,6 +10,11 @@ import subprocess
 import sys
 import tempfile
 
+import pytest
+
+# integration: the operator surface is driven through the CLI in a subprocess
+pytestmark = pytest.mark.integration
+
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, HERE)
 
@@ -78,10 +83,10 @@ class TestIdentityDetection:
         try:
             for ip in ("1.2.3.4", "1.2.3.5"):
                 db.record("https://x.test/login", ip, "Pune", "IN", "ISP", "UA",
-                          "desktop", {"loginfmt": "ravi@corp.in", "passwd": "S3cret"},
+                          "desktop", {"loginfmt": "ravi@corp.test", "passwd": "S3cret"},
                           True, "c1", 0, "")
             st = db.reuse_stats()
-            assert [i["identity"] for i in st["repeated_identities"]] == ["ravi@corp.in"]
+            assert [i["identity"] for i in st["repeated_identities"]] == ["ravi@corp.test"]
             assert st["repeated_passwords"], "password reuse was not correlated"
         finally:
             db.close()

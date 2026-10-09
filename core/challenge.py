@@ -15,7 +15,7 @@ session-bound, short-lived token - and only a request carrying that token gets t
 clone. A scanner that does not run the script, or runs it without interacting, stays
 on the interstitial for good.
 
-Two honest limits: an operator must not be surprised that a first request from a real
+Two limits: an operator must not be surprised that a first request from a real
 person costs one extra round trip (it is ~1-2 s and looks like an ordinary
 "checking your browser" step), and a determined automation stack that drives a real
 browser with a real mouse *will* pass - this raises the cost, it does not make the

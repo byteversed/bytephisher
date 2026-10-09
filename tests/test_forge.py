@@ -182,7 +182,7 @@ class TestForgeAnalysis:
             a = forge.forge(site.url("/login"))
         assert "/" not in a["auth_urls"]
 
-    def test_confidence_is_honest_about_weak_pages(self):
+    def test_confidence_labels_weak_pages_as_suspected(self):
         with Site() as site:
             a = forge.forge(site.url("/otp"))
         assert a["confidence"]["credentials"] in ("low", "medium")

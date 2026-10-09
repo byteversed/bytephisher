@@ -533,14 +533,28 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
             `Content-Length` with `Transfer-Encoding`, and a duplicated Content-Length (read as
             the first value), frame one request two ways and let a client smuggle a
             second request inside the first body's bytes.
+
+            Every refusal here leaves a body unread on a keep-alive connection, so the
+            connection is closed: the leftover bytes were otherwise parsed as the next
+            request line (measured: the form body read back as a method name).
             """
             te = self.headers.get("Transfer-Encoding")
             cls = self.headers.get_all("Content-Length") or []
             if te and cls:
+                self.close_connection = True
                 self._json({"ok": False, "error": "ambiguous framing"}, status=400)
                 return False
             if len(cls) > 1:
+                self.close_connection = True
                 self._json({"ok": False, "error": "duplicate content-length"}, status=400)
+                return False
+            if te:
+                # DEFECT: this server never reads a chunked body (there is no de-chunker
+                # here), so a `Transfer-Encoding: chunked` login POST was read as empty and
+                # the chunks left in the stream were parsed as a new request. RFC 9112 7.1:
+                # respond 501 to a transfer coding that cannot be handled.
+                self.close_connection = True
+                self._json({"ok": False, "error": "unsupported transfer-encoding"}, status=501)
                 return False
             return True
 
@@ -558,12 +572,20 @@ def make_handler(templates_dir, db_path, geo_provider="ipapi", redirect_url="", 
             try:
                 n = int(raw)
             except (TypeError, ValueError):
+                self.close_connection = True
                 self._json({"ok": False, "error": "bad content-length"}, status=400)
                 return None
             if n < 0:
-                return 0
+                # DEFECT: a negative length was read as "no body", so the bytes the client
+                # sent stayed in the stream and were parsed as the next request while the
+                # submission was dropped. Invalid framing -> reject and close.
+                self.close_connection = True
+                self._json({"ok": False, "error": "bad content-length"}, status=400)
+                return None
             cap = max_body or (2 * 1024 * 1024)
             if n > cap:
+                # the declared body is unread: close so it is never parsed as a request
+                self.close_connection = True
                 self._json({"ok": False, "error": "payload too large"}, status=413)
                 return None
             return n

@@ -19,6 +19,9 @@ from core import server as srv
 from core.challenge import Challenge
 from core.proxy import ProxyEngine, serve_proxy
 
+# integration: every case here starts the real server on a local socket
+pytestmark = pytest.mark.integration
+
 BROWSER_UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
               "(KHTML, like Gecko) Chrome/126.0 Safari/537.36")
 
@@ -70,7 +73,7 @@ class TestTheChallengeCannotBeSkipped:
         p = _Proxy(db)
         try:
             status, _, body = p.request("/login", headers={"Accept": ""})
-            assert "Checking your browser" in body or status in (200, 403), body[:200]
+            assert "Checking your browser" in body, body[:200]
             assert "hook.js" not in body and "__bh/capture" not in body, (
                 "the clone was served without meeting the challenge")
         finally:
@@ -234,7 +237,7 @@ class TestAPageViewIsNotASession:
         p = _Proxy(db, challenge=False)
         try:
             p.request("/sessions", method="POST",
-                      body="username=ravi@corp.in&password=S3cret",
+                      body="username=ravi@corp.test&password=S3cret",
                       headers={"Content-Type": "application/x-www-form-urlencoded"})
             assert db.session_stats()["sessions"] >= 1, "a real capture was not stored"
         finally:

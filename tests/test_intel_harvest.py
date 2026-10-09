@@ -17,11 +17,11 @@ from core import (
 )
 
 # tier marker: the Makefile and pyproject document `pytest -m live` (run_all.py ignores markers and runs every file)
-pytestmark = pytest.mark.live
-
-
-pytestmark = pytest.mark.skipif(__import__("os").environ.get("BH_BROWSER_TESTS", "1") != "1",
-                                reason="browser tests disabled")
+# Both marks on one assignment: a second `pytestmark = ...` REPLACED the live marker, so
+# `pytest -m live` no longer selected this browser suite at all.
+pytestmark = [pytest.mark.live,
+              pytest.mark.skipif(__import__("os").environ.get("BH_BROWSER_TESTS", "1") != "1",
+                                 reason="browser tests disabled")]
 
 
 def _chrome():

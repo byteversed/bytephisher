@@ -141,11 +141,15 @@ class TestPosixOnlyCode:
 
     def test_chmod_is_guarded(self):
         src = open(os.path.join(ROOT, "tunnels", "__init__.py"), encoding="utf-8").read()
-        for i, line in enumerate(src.split("\n")):
-            if "os.chmod(" in line:
-                window = "\n".join(src.split("\n")[max(0, i - 6):i + 1])
-                assert 'os.name != "nt"' in window, \
-                    f"os.chmod without a Windows guard near line {i + 1}"
+        lines = src.split("\n")
+        for i, line in enumerate(lines):
+            if "os.chmod(" not in line:
+                continue
+            # The guard must come BEFORE the call: a mention after it (a comment, a
+            # later branch) must not satisfy this check.
+            before = "\n".join(lines[max(0, i - 6):i])
+            assert 'os.name != "nt"' in before, \
+                f"os.chmod without a Windows guard before line {i + 1}"
 
     def test_no_shell_true(self):
         offenders = []

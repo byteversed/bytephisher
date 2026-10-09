@@ -19,11 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Usage note: this software exists for AUTHORIZED security testing, security
-awareness programmes and red-team engagements. Running it against systems
-without written permission is illegal in most jurisdictions and is not a
-supported use. The licence above grants rights to the code; it does not grant
-anyone permission to target anybody.

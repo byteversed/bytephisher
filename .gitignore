@@ -1,12 +1,39 @@
-# runtime artifacts
+# ============================================================= runtime ========
+# everything a campaign writes at run time; never commit any of it
 data/
 logs/
 bin/
+captures/
+reports/
+screenshots/
 *.db
 *.db-wal
 *.db-shm
+*.sqlite
+*.sqlite3
 
-# python
+# ============================================================= sessions =======
+# packet / proxy / session dumps carry live cookies and credentials
+*.har
+*.pcap
+*.pcapng
+*.cap
+*.jsonl
+
+# ============================================================= secrets ========
+# keys and certificates; the only exception is the self-signed test pair under
+# tests/fixtures (see the negation at the bottom of this file)
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+*.jks
+.env
+.env.*
+config/config.local.yaml
+
+# ============================================================= python =========
 .venv/
 __pycache__/
 *.pyc
@@ -18,13 +45,17 @@ htmlcov/
 build/
 dist/
 
-# generated templates (regenerate with tools/gen_templates.py)
-templates/
+# ============================================================= generated ======
 
-# secrets
-config/config.local.yaml
-data/*.db
-data/*.db-wal
-data/*.db-shm
-bin/bore
-logs/*.log
+# ============================================================= noise ==========
+*.log
+*.csv
+*.bak
+*.orig
+*.rej
+*.swp
+
+# ============================================================= exceptions =====
+# not a real credential. It is consumed by the TLS test path in core/server.py, so it
+# must stay tracked; the negation below must come after the *.pem/*.key rules above.
+!tests/fixtures/*.pem

