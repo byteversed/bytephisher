@@ -1,0 +1,38 @@
+# BytePhisher systemd unit — run a campaign as a managed service.
+#
+#   install:
+#     cp deploy/bytephisher.service /etc/systemd/system/
+#     systemctl daemon-reload
+#     systemctl enable --now bytephisher
+#   logs:
+#     journalctl -u bytephisher -f
+#
+# Edit WorkingDirectory/ExecStart for your own template, campaign and tunneler.
+[Unit]
+Description=BytePhisher phishing-simulation framework (authorized engagements)
+Documentation=file:///opt/bytephisher/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/bytephisher
+# -t cloudflared exposes a public https URL; use -t none for a local-only run.
+ExecStart=/opt/bytephisher/.venv/bin/python /opt/bytephisher/bytephisher.py \
+    -o google -t cloudflared -p 8080 --otp --geo ipapi \
+    --campaign example-campaign --no-tui
+Restart=on-failure
+RestartSec=5
+# stdout is line-buffered by the app, so journalctl shows captures live
+StandardOutput=journal
+StandardError=journal
+# hardening: the tool needs outbound network + a local port, little else
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/bytephisher/data /opt/bytephisher/logs /opt/bytephisher/bin
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

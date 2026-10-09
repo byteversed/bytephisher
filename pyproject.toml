@@ -1,0 +1,97 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bytephisher"
+version = "0.1.0"
+description = "Advanced phishing-simulation framework for authorized security-awareness and red-team engagements"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "BytePhisher contributors" }]
+keywords = [
+    "security",
+    "phishing-simulation",
+    "security-awareness",
+    "red-team",
+    "pentest",
+    "reverse-proxy",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Information Technology",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Security",
+]
+dependencies = [
+    "rich>=13.0",
+    "jinja2>=3.1",
+    "requests>=2.31",
+    "pyyaml>=6.0",
+    "flask>=3.0",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=8.0", "pytest-timeout>=2.3", "aiosmtpd>=1.4", "tomli; python_version < '3.11'"]
+dev = ["pytest>=8.0", "pytest-timeout>=2.3", "aiosmtpd>=1.4", "ruff>=0.6"]
+
+[project.scripts]
+bytephisher = "bytephisher:main"
+
+[project.urls]
+Homepage = "https://github.com/byteversed/bytephisher"
+Documentation = "https://github.com/byteversed/bytephisher/tree/main/docs"
+Source = "https://github.com/byteversed/bytephisher"
+
+[tool.setuptools]
+# the CLI is a top-level module; the engine lives in these packages
+py-modules = ["bytephisher"]
+packages = ["core", "tunnels", "dashboard", "mailer", "tools"]
+
+[tool.setuptools.package-data]
+# The browser-side collector lives INSIDE the core package so it travels with a wheel.
+# The previous declaration named `bytephisher`, a py-module and not a package, so it
+# silently packaged nothing: an installed wheel had no assets and the collector could not
+# be served (found by installing the built wheel into a clean venv and calling render_js)
+"*" = ["*.json", "*.yaml"]
+core = ["assets/*.js", "config/*.yaml", "config/phishlets/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 300
+# markers let you run one tier at a time:
+#   pytest -m unit          fast, no network
+#   pytest -m integration   local servers/subprocesses
+#   pytest -m live          real internet (tunnels, geo, SMTP)
+markers = [
+    "unit: no network, no subprocesses, milliseconds to seconds",
+    "integration: local sockets, temp databases, subprocess CLI runs",
+    "live: touches the real internet (tunnels, geo APIs, SMTP sink)",
+    "slow: takes more than ~10s on a normal machine",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning:flask.*",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = [".venv", "templates", "data", "logs"]
+
+[tool.ruff.lint]
+# pragmatic set: real bugs first, style second. E501 stays off because the
+# reports and templates carry long literal lines on purpose.
+select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]
+ignore = ["E501", "SIM108", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011", "SIM117", "SIM115"]

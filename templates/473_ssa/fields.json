@@ -1,0 +1,16 @@
+{
+  "capture_fields": [
+    "username",
+    "password"
+  ],
+  "otp_fields": [
+    "otp_1",
+    "otp_2",
+    "otp_3",
+    "otp_4",
+    "otp_5",
+    "otp_6"
+  ],
+  "honeypot": "hp_email",
+  "has_otp": true
+}

@@ -1,0 +1,21 @@
+version: 2
+updates:
+  # The runtime and test dependencies. Grouped so one PR carries the routine
+  # bumps instead of opening a PR per package.
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    groups:
+      python-deps:
+        patterns: ["*"]
+
+  # The workflow actions themselves (checkout, setup-python, upload-artifact).
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    groups:
+      actions:
+        patterns: ["*"]
