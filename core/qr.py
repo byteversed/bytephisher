@@ -15,7 +15,7 @@ without an imaging dependency.
 import struct
 import zlib
 
-__all__ = ["QRTooLong", "encode", "from_text", "svg", "png", "ascii_art", "capacity"]
+__all__ = ["QRTooLong", "encode", "svg", "png", "ascii_art", "capacity"]
 
 # data codewords per (version, ecc)
 _DATA_CODEWORDS = {
@@ -329,14 +329,6 @@ def _penalty(m):
     return score
 
 
-def _bch(value, poly, bits):
-    v = value << bits
-    for i in range(bits, -1, -1):
-        if v & (1 << (i + bits - 1)):
-            v ^= poly << (i - 1)
-    return v
-
-
 def _format_bits(ecc, mask):
     data = (_ECC_BITS[ecc] << 3) | mask
     rem = data << 10
@@ -445,11 +437,6 @@ def encode(payload, ecc="M", version=None, mask=None):
     return matrix
 
 
-def from_text(text, ecc="M", version=None):
-    return encode(text, ecc=ecc, version=version)
-
-
-# ------------------------------------------------------------------- renderers --
 def svg(matrix, scale=4, border=4, dark="#000000", light="#ffffff"):
     """An SVG string (no dependency, embeds in HTML mail or a PDF)."""
     n = len(matrix)
